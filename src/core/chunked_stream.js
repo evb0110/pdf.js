@@ -558,6 +558,10 @@ class ChunkedStreamManager {
    */
   groupChunks(chunks) {
     const groupedChunks = [];
+    const maxChunksPerRequest = Math.max(
+      1,
+      Math.floor((8 * 1024 * 1024) / this.chunkSize)
+    );
     let beginChunk = -1;
     let prevChunk = -1;
 
@@ -567,7 +571,10 @@ class ChunkedStreamManager {
         beginChunk = chunk;
       }
 
-      if (prevChunk >= 0 && prevChunk + 1 !== chunk) {
+      if (
+        prevChunk >= 0 &&
+        (prevChunk + 1 !== chunk || chunk - beginChunk >= maxChunksPerRequest)
+      ) {
         groupedChunks.push({ beginChunk, endChunk: prevChunk + 1 });
         beginChunk = chunk;
       }
