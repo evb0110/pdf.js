@@ -21,6 +21,8 @@ import {
   isNodeJS,
   PasswordException,
   setVerbosityLevel,
+  stringToPDFString,
+  UnknownErrorException,
   VerbosityLevel,
   warn,
 } from "../shared/util.js";
@@ -66,6 +68,22 @@ class WorkerTask {
       throw new Error("Worker task was terminated");
     }
   }
+}
+
+function throwIfRangeSourceMaterializationUnsupported(pdfManager, operation) {
+  if (!(pdfManager instanceof NetworkPdfManager)) {
+    return;
+  }
+  const error = new UnknownErrorException(
+    `PDF.js ${operation} cannot materialize a range-backed document; use a native path operation.`,
+    {
+      code: "native-save-required",
+      operation,
+    }
+  );
+  error.code = "native-save-required";
+  error.operation = operation;
+  throw error;
 }
 
 class WorkerMessageHandler {
@@ -549,9 +567,11 @@ class WorkerMessageHandler {
       return pdfManager.ensureCatalog("markInfo");
     });
 
-    handler.on("GetData", async function () {
-      const stream = await pdfManager.requestLoadedStream();
-      return stream.bytes;
+    handler.on("GetData", function (data) {
+      throwIfRangeSourceMaterializationUnsupported(pdfManager, "GetData");
+      return pdfManager
+        .requestLoadedStream()
+        .then(stream => stream.getByteRange(0, stream.end));
     });
 
     handler.on("GetAnnotations", async function ({ pageIndex, intent }) {
@@ -687,6 +707,10 @@ class WorkerMessageHandler {
     handler.on(
       "SaveDocument",
       async function ({ isPureXfa, numPages, annotationStorage, filename }) {
+        throwIfRangeSourceMaterializationUnsupported(
+          pdfManager,
+          "SaveDocument"
+        );
         const globalPromises = [
           pdfManager.requestLoadedStream(),
           pdfManager.ensureCatalog("acroForm"),
@@ -811,11 +835,11 @@ class WorkerMessageHandler {
         if (isPureXfa) {
           xfaData = refs[0];
           if (!xfaData) {
-            return stream.bytes;
+            return stream.getByteRange(0, stream.end);
           }
         } else if (changes.size === 0) {
           // No new refs so just return the initial bytes
-          return stream.bytes;
+          return stream.getByteRange(0, stream.end);
         }
 
         const needAppearances =
@@ -867,7 +891,7 @@ class WorkerMessageHandler {
         }
 
         return incrementalUpdate({
-          originalData: stream.bytes,
+          originalData: stream.getByteRange(0, stream.end),
           xrefInfo: newXrefInfo,
           changes,
           xref,
