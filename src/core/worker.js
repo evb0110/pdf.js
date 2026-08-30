@@ -351,11 +351,15 @@ class WorkerMessageHandler {
             onFailure(reason);
             return;
           }
-          pdfManager.requestLoadedStream().then(function () {
-            ensureNotTerminated();
-
+          if (pdfManager instanceof NetworkPdfManager) {
             loadDocument(true).then(onSuccess, onFailure);
-          });
+          } else {
+            pdfManager.requestLoadedStream().then(function () {
+              ensureNotTerminated();
+
+              loadDocument(true).then(onSuccess, onFailure);
+            });
+          }
         });
       }
 
@@ -374,7 +378,7 @@ class WorkerMessageHandler {
           pdfManager = newPdfManager;
 
           pdfManager.requestLoadedStream(/* noFetch = */ true).then(stream => {
-            handler.send("DataLoaded", { length: stream.bytes.byteLength });
+            handler.send("DataLoaded", { length: stream.length });
           });
         })
         .then(pdfManagerReady, onFailure);
