@@ -1,0 +1,19 @@
+src/display/transport_stream.js
+  s_7fe07412ad5143::t_732cd3a97b9cc7 63,74,92,211,220,225,232-235,239-240
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "e99dbe519636aa97bdd6759ff6935189a648fd53",
+  "prompts": {},
+  "sessions": {
+    "s_7fe07412ad5143": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a053f1-8791-7880-94f2-4cc9164f385c",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Eugene Barsky <34789976+evb0110@users.noreply.github.com>"
+    }
+  }
+}
