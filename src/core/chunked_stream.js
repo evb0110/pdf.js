@@ -305,6 +305,19 @@ class ChunkedStream extends Stream {
     return this._getStoredRange(begin, end);
   }
 
+  discardChunksBefore(position) {
+    const firstChunk = Math.max(0, Math.floor(position / this.chunkSize));
+    const progressiveChunkCount = Math.ceil(
+      this.progressiveDataLength / this.chunkSize
+    );
+    for (const chunk of this._storedChunks.keys()) {
+      if (chunk < firstChunk && chunk >= progressiveChunkCount) {
+        this._storedChunks.delete(chunk);
+        this._loadedChunks.delete(chunk);
+      }
+    }
+  }
+
   makeSubStream(start, length, dict = null) {
     if (length) {
       if (start + length > this.progressiveDataLength) {
@@ -352,6 +365,17 @@ class ChunkedStream extends Stream {
     subStream.end = start + length || this.end;
     subStream.dict = dict;
     return subStream;
+  }
+
+  clone() {
+    function ChunkedStreamClone() {}
+
+    ChunkedStreamClone.prototype = Object.create(this);
+    const clone = new ChunkedStreamClone();
+    clone.pos = clone.start = this.start;
+    clone.end = this.end;
+    clone.dict = this.dict?.clone?.() ?? this.dict;
+    return clone;
   }
 
   getBaseStreams() {
