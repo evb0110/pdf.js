@@ -359,10 +359,9 @@ class WorkerMessageHandler {
             onFailure(reason);
             return;
           }
-          pdfManager.requestLoadedStream().then(function () {
-            ensureNotTerminated();
-
+          if (pdfManager instanceof NetworkPdfManager) {
             loadDocument(true).then(onSuccess, onFailure);
+          }, onFailure);
           }, onFailure);
         });
       }
@@ -383,7 +382,7 @@ class WorkerMessageHandler {
 
           pdfManager.requestLoadedStream(/* noFetch = */ true).then(
             stream => {
-              handler.send("DataLoaded", { length: stream.bytes.byteLength });
+              handler.send("DataLoaded", { length: stream.length });
             },
             () => {
               // Avoid errors if document loading was terminated.
