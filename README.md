@@ -6,6 +6,39 @@ PDF.js is community-driven and supported by Mozilla. Our goal is to
 create a general-purpose, web standards-based platform for parsing and
 rendering PDFs.
 
+## EVB Viewer source fork
+
+This repository is a modified work based on PDF.js `v5.7.284`, under the
+Apache License 2.0. The modifications below are made under Apache License 2.0
+section 4(b). The source is built and published as `@evb0110/pdfjs-dist`.
+
+| Edit | Source file | Modification |
+| --- | --- | --- |
+| 1 | `src/display/editor/editor.js` | Stop `addEditToolbar` when the toolbar is removed during an awaited button addition. |
+| 2 | `src/display/canvas.js` | Make the image prescale threshold configurable, defaulting to `2`. |
+| 3 | `src/display/canvas.js` | Use a `4 / 3` prescale threshold for image masks. |
+| 4 | `src/display/transport_stream.js` | Forward range completion state to range readers. |
+| 5 | `src/display/transport_stream.js` | Queue all range-reader chunks and finish only after the final chunk. |
+| 6 | `src/display/api.js` | Add `isLast` to `PDFDataRangeTransport.onDataRange`. |
+| 7 | `src/display/text_layer.js` | Reject the text-layer render promise when a pump continuation fails. |
+| 8 | `src/display/text_layer.js` | Keep marked-content unwinding at the root container. |
+| 9 | `src/core/chunked_stream.js` | Store received chunk bytes sparsely and enforce range bounds. |
+| 10 | `src/core/chunked_stream.js` | Add chunk discard and stream clone operations. |
+| 11 | `src/core/chunked_stream.js` | Stream range-reader chunks directly into the chunked stream. |
+| 12 | `src/core/chunked_stream.js` | Cap grouped range requests at 8 MiB. |
+| 13 | `src/core/evaluator.js` | Hash Unicode streams through `getByteRange`. |
+| 14 | `src/core/xref.js` | Recover malformed network XRefs through bounded scan windows. |
+| 15 | `src/core/worker.js` | Avoid loading a network stream during recovery and report its declared length. |
+| 16 | `src/core/worker.js` | Reject whole-document materialization for range sources and read ranges without `stream.bytes`. |
+
+After normalizing version metadata and generated formatting, the modern and
+legacy display and worker bundles match the v5.7.284 patched baseline. The
+only semantic differences are the intentional source-port reformulations:
+edit 14 uses the `ChunkedStream` capability test needed to avoid the source
+import cycle, edit 16 places its helper at module scope, and the source keeps
+the `TESTING` assertions that production preprocessing removes. The upstream
+license and notices remain in place.
+
 ## Contributing
 
 PDF.js is an open source project and always looking for more contributors. To
