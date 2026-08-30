@@ -1026,7 +1026,8 @@ class CanvasGraphics {
       // Pre-scale if needed to improve image smoothing.
       const scaleResult = this._scaleImage(
         maskCanvas.canvas,
-        getCurrentTransformInverse(fillCtx)
+        getCurrentTransformInverse(fillCtx),
+        4 / 3
       );
       scaled = scaleResult.img;
       scaledEntry = scaleResult.tmpCanvas;
