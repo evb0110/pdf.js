@@ -1,0 +1,35 @@
+test/unit/stream_spec.js
+  s_7fe07412ad5143::t_27255c39490ca7 16-19,45-95
+  s_7fe07412ad5143::t_015f321f53eddf 20-22
+README.md
+  s_7fe07412ad5143::t_679dcbab84632e 9-33,41
+  s_7fe07412ad5143::t_5767d60c69a2ee 34-40
+gulpfile.mjs
+  s_7fe07412ad5143::t_d2a33b4ea10618 2662-2663,2665-2667
+.github/workflows/publish_release.yml
+  s_7fe07412ad5143::t_d2a33b4ea10618 34-35,41-43
+src/core/chunked_stream.js
+  s_7fe07412ad5143::t_d8d55d8c7cf621 18
+src/core/xref.js
+  s_7fe07412ad5143::t_ace3ea1cb4d4ff 34
+src/display/canvas.js
+  s_7fe07412ad5143::t_de9539c3f15ff7 498
+test/unit/api_spec.js
+  s_7fe07412ad5143::t_c54043061df88d 2474-2476,2513-2515,2544-2546
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "eacb437fadfe16d3d38a9159dff8b6f9e9f33be1",
+  "prompts": {},
+  "sessions": {
+    "s_7fe07412ad5143": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a053f1-8791-7880-94f2-4cc9164f385c",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Eugene Barsky <34789976+evb0110@users.noreply.github.com>"
+    }
+  }
+}
