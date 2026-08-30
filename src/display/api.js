@@ -634,8 +634,8 @@ class PDFDataRangeTransport {
    * @param {number} begin
    * @param {Uint8Array|null} chunk
    */
-  onDataRange(begin, chunk) {
-    this.#listener({ type: "range", begin, chunk });
+  onDataRange(begin, chunk, isLast = true) {
+    this.#listener({ type: "range", begin, chunk, isLast });
   }
 
   /**
