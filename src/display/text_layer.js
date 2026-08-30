@@ -193,16 +193,19 @@ class TextLayer {
     }
 
     const pump = () => {
-      this.#reader.read().then(({ value, done }) => {
-        if (done) {
-          this.#capability.resolve();
-          return;
-        }
-        this.#lang ??= value.lang;
-        Object.assign(this.#styleCache, value.styles);
-        this.#processItems(value.items);
-        pump();
-      }, this.#capability.reject);
+      this.#reader
+        .read()
+        .then(({ value, done }) => {
+          if (done) {
+            this.#capability.resolve();
+            return;
+          }
+          this.#lang ??= value.lang;
+          Object.assign(this.#styleCache, value.styles);
+          this.#processItems(value.items);
+          pump();
+        }, this.#capability.reject)
+        .catch(this.#capability.reject);
     };
     this.#reader = this.#textContentSource.getReader();
     TextLayer.#pendingTextLayers.add(this);
@@ -310,7 +313,9 @@ class TextLayer {
           }
           parent.append(this.#container);
         } else if (item.type === "endMarkedContent") {
-          this.#container = this.#container.parentNode;
+          if (this.#container !== this.#rootContainer) {
+            this.#container = this.#container.parentNode ?? this.#rootContainer;
+          }
         }
         continue;
       }
