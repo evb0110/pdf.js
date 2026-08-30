@@ -60,7 +60,7 @@ class PDFDataTransportStream extends BasePDFStream {
       switch (args.type) {
         case "range":
         case "progressiveRead":
-          this.#onReceiveData(args.begin, args.chunk);
+          this.#onReceiveData(args.begin, args.chunk, args.isLast);
           break;
         case "progressiveDone":
           this._fullReader?.progressiveDone();
@@ -71,7 +71,7 @@ class PDFDataTransportStream extends BasePDFStream {
     pdfDataRangeTransport.transportReady(listener);
   }
 
-  #onReceiveData(begin, chunk) {
+  #onReceiveData(begin, chunk, isLast = true) {
     const buffer = getArrayBuffer(chunk);
 
     if (begin === undefined) {
@@ -89,7 +89,7 @@ class PDFDataTransportStream extends BasePDFStream {
         rangeReader,
         "#onReceiveData - no `PDFDataTransportStreamRangeReader` instance found."
       );
-      rangeReader._enqueue(buffer);
+      rangeReader._enqueue(buffer, isLast);
     }
   }
 
@@ -208,7 +208,7 @@ class PDFDataTransportStreamRangeReader extends BasePDFStreamRangeReader {
 
   _done = false;
 
-  _queuedChunk = null;
+  _queuedChunks = [];
 
   _requests = [];
 
@@ -217,26 +217,27 @@ class PDFDataTransportStreamRangeReader extends BasePDFStreamRangeReader {
     this._begin = begin;
   }
 
-  _enqueue(chunk) {
+  _enqueue(chunk, isLast = true) {
     if (this._done) {
       return; // ignore new data
     }
     if (this._requests.length === 0) {
-      this._queuedChunk = chunk;
+      this._queuedChunks.push(chunk);
     } else {
       const capability = this._requests.shift();
       capability.resolve({ value: chunk, done: false });
 
       this.#endRequests();
     }
-    this._done = true;
-    this.onDone?.();
+    if (isLast) {
+      this._done = true;
+      this.onDone?.();
+    }
   }
 
   async read() {
-    if (this._queuedChunk) {
-      const chunk = this._queuedChunk;
-      this._queuedChunk = null;
+    if (this._queuedChunks.length > 0) {
+      const chunk = this._queuedChunks.shift();
       return { value: chunk, done: false };
     }
     if (this._done) {
