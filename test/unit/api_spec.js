@@ -2471,7 +2471,9 @@ describe("api", function () {
     });
 
     it("write a value in an annotation, save the pdf and check the value in xfa datasets (1)", async function () {
-      let loadingTask = getDocument(buildGetDocumentParams("issue16081.pdf"));
+      let loadingTask = getDocument(
+        buildGetDocumentParams("issue16081.pdf", { disableRange: true })
+      );
       let pdfDoc = await loadingTask.promise;
       const value = "Hello World";
 
@@ -2508,7 +2510,9 @@ describe("api", function () {
     it("write a value in an annotation, save the pdf and check the value in xfa datasets (2)", async function () {
       // In this file the path to the fields are wrong but the last path element
       // is unique so we can guess what the node is.
-      let loadingTask = getDocument(buildGetDocumentParams("f1040_2022.pdf"));
+      let loadingTask = getDocument(
+        buildGetDocumentParams("f1040_2022.pdf", { disableRange: true })
+      );
       let pdfDoc = await loadingTask.promise;
 
       pdfDoc.annotationStorage.setValue("1573R", { value: "hello" });
@@ -2537,7 +2541,9 @@ describe("api", function () {
     });
 
     it("write a new annotation, save the pdf and check that the prev entry in xref stream is correct", async function () {
-      let loadingTask = getDocument(buildGetDocumentParams("bug1823296.pdf"));
+      let loadingTask = getDocument(
+        buildGetDocumentParams("bug1823296.pdf", { disableRange: true })
+      );
       let pdfDoc = await loadingTask.promise;
       let page = await pdfDoc.getPage(1);
       const originalStructTree = await page.getStructTree();
