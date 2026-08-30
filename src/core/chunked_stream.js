@@ -13,9 +13,9 @@
  * limitations under the License.
  */
 
-import { arrayBuffersToBytes, MissingDataException } from "./core_utils.js";
 import { assert } from "../shared/util.js";
 import { MathClamp } from "../shared/math_clamp.js";
+import { MissingDataException } from "./core_utils.js";
 import { Stream } from "./stream.js";
 
 class ChunkedStream extends Stream {
@@ -407,13 +407,13 @@ class ChunkedStreamManager {
 
   async sendRequest(begin, end) {
     const rangeReader = this.pdfStream.getRangeReader(begin, end);
-    let chunks = [];
+    let nextBegin = begin;
+    let receivedBytes = 0;
 
     while (true) {
       const { value, done } = await rangeReader.read();
 
       if (this.aborted) {
-        chunks = null;
         return; // Ignoring any data after abort.
       }
       if (done) {
@@ -425,17 +425,33 @@ class ChunkedStreamManager {
           "sendRequest - expected an ArrayBuffer."
         );
       }
-      chunks.push(value);
+      if (value.byteLength === 0) {
+        continue;
+      }
+      const nextEnd = nextBegin + value.byteLength;
+      if (nextEnd > end) {
+        throw new Error(
+          `Range reader returned data beyond the requested end: ${nextEnd} > ${end}`
+        );
+      }
+      this.onReceiveData({
+        chunk: value,
+        begin: nextBegin,
+      });
+      nextBegin = nextEnd;
+      receivedBytes += value.byteLength;
     }
 
-    if (chunks.length === 0 && this.disableAutoFetch) {
+    if (receivedBytes === 0 && this.disableAutoFetch) {
       // The range request wasn't dispatched, see the "GetRangeReader" handler
       // in the `src/display/api.js` file.
       return;
     }
-    const data = arrayBuffersToBytes(chunks);
-    chunks = null;
-    this.onReceiveData({ chunk: data.buffer, begin });
+    if (nextBegin !== end) {
+      throw new Error(
+        `Range reader ended before the requested end: ${nextBegin} < ${end}`
+      );
+    }
   }
 
   /**
