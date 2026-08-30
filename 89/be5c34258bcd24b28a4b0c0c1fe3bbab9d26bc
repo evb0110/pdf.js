@@ -1,0 +1,20 @@
+src/core/chunked_stream.js
+  s_7fe07412ad5143::t_f4bb2028cdb072 308-320,370-379
+  s_7fe07412ad5143::t_7e96b920d79127 380
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "89be5c34258bcd24b28a4b0c0c1fe3bbab9d26bc",
+  "prompts": {},
+  "sessions": {
+    "s_7fe07412ad5143": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a053f1-8791-7880-94f2-4cc9164f385c",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Eugene Barsky <34789976+evb0110@users.noreply.github.com>"
+    }
+  }
+}
