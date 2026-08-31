@@ -1,0 +1,23 @@
+gulpfile.mjs
+  s_c11d266df53e3e::t_09cc880d08f42a 21,1035-1042
+  s_c11d266df53e3e::t_9244039f62434e 1032-1034,1043-1047,1056-1057,2740-2744
+scripts/verify_fork_artifacts.mjs
+  s_c11d266df53e3e::t_09cc880d08f42a 30-50,65
+  s_c11d266df53e3e::t_9244039f62434e 60,64,66-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "f029c04600ed3d851491c0d70eafe7caa1557d36",
+  "prompts": {},
+  "sessions": {
+    "s_c11d266df53e3e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05798-a34d-7601-8580-92b8abfac631",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Eugene Barsky <34789976+evb0110@users.noreply.github.com>"
+    }
+  }
+}
