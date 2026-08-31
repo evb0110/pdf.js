@@ -10,7 +10,8 @@ rendering PDFs.
 
 This repository is a modified work based on PDF.js `v5.7.284`, under the
 Apache License 2.0. The modifications below are made under Apache License 2.0
-section 4(b). The source is built and published as `@evb0110/pdfjs-dist`.
+section 4(b). The source is built as the `pdfjs-dist` package for compatibility
+with existing PDF.js consumers. This fork does not publish the package.
 
 | Edit | Source file | Modification |
 | --- | --- | --- |

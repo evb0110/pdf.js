@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "description": "Bundled third-party components included by the PDF.js distribution build.",
+  "components": [
+    {
+      "name": "Adobe CMaps",
+      "path": "cmaps/",
+      "licenseFiles": ["cmaps/LICENSE"]
+    },
+    {
+      "name": "ICC profile",
+      "path": "iccs/",
+      "licenseFiles": ["iccs/LICENSE"]
+    },
+    {
+      "name": "Foxit and Liberation fonts",
+      "path": "standard_fonts/",
+      "licenseFiles": [
+        "standard_fonts/LICENSE_FOXIT",
+        "standard_fonts/LICENSE_LIBERATION"
+      ]
+    },
+    {
+      "name": "OpenJPEG",
+      "path": "build/wasm/",
+      "licenseFiles": [
+        "build/wasm/LICENSE_OPENJPEG",
+        "build/wasm/LICENSE_PDFJS_OPENJPEG"
+      ]
+    },
+    {
+      "name": "QCMS",
+      "path": "build/wasm/",
+      "licenseFiles": [
+        "build/wasm/LICENSE_QCMS",
+        "build/wasm/LICENSE_PDFJS_QCMS"
+      ]
+    },
+    {
+      "name": "JBIG2",
+      "path": "build/wasm/",
+      "licenseFiles": [
+        "build/wasm/LICENSE_JBIG2",
+        "build/wasm/LICENSE_PDFJS_JBIG2"
+      ]
+    },
+    {
+      "name": "QuickJS",
+      "path": "build/wasm/",
+      "licenseFiles": ["build/wasm/README.md"]
+    },
+    { "name": "Brotli", "path": "", "licenseFiles": ["LICENSE_BROTLI"] }
+  ]
+}

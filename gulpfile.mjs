@@ -283,7 +283,7 @@ function createWebpackConfig(
 ) {
   const versionInfo = !disableVersionInfo
     ? getVersionJSON()
-    : { version: 0, commit: 0 };
+    : { version: 0, commit: 0, sourceCommit: 0, sourceTree: 0 };
   const bundleDefines = {
     ...defines,
     BUNDLE_VERSION: versionInfo.version,
@@ -302,6 +302,8 @@ function createWebpackConfig(
     "/**",
     ` * pdfjsVersion = ${versionInfo.version}`,
     ` * pdfjsBuild = ${versionInfo.commit}`,
+    ` * pdfjsSourceCommit = ${versionInfo.sourceCommit}`,
+    ` * pdfjsSourceTree = ${versionInfo.sourceTree}`,
     " */",
   ].join("\n");
   const enableSourceMaps =
@@ -656,6 +658,7 @@ function createWasmBundle({ includeQuickJS = true } = {}) {
         [
           "external/quickjs/quickjs-eval.js",
           "external/quickjs/quickjs-eval.wasm",
+          "external/quickjs/README.md",
         ],
         {
           base: "external/quickjs",
@@ -1034,6 +1037,13 @@ function createBuildNumber(done) {
               version,
               build: buildNumber,
               commit: buildCommit,
+              sourceCommit: execSync("git rev-parse HEAD").toString().trim(),
+              sourceTree: execSync("git rev-parse HEAD^{tree}")
+                .toString()
+                .trim(),
+              sourceRepository: "https://github.com/evb0110/pdf.js.git",
+              sourceBaseCommit: "5e0ac85d697d41a2232045033962b3437b7e2ad1",
+              sourceBaseTree: "9dbb438c9a4bce5a958ca8b37d305b79b5b74c6a",
             },
             null,
             2
@@ -2657,9 +2667,10 @@ gulp.task(
 );
 
 function packageJson() {
-  const VERSION = getVersionJSON().version;
+  const versionInfo = getVersionJSON();
+  const VERSION = versionInfo.version;
 
-  const DIST_NAME = "@evb0110/pdfjs-dist";
+  const DIST_NAME = "pdfjs-dist";
   const DIST_DESCRIPTION = "EVB Viewer fork of Mozilla's PDF.js library.";
   const DIST_KEYWORDS = ["Mozilla", "pdf", "pdf.js"];
   const DIST_HOMEPAGE = "https://github.com/evb0110/pdf.js";
@@ -2695,12 +2706,39 @@ function packageJson() {
       node: ">=22.13.0 || >=24",
     },
     scripts: {},
+    "x-evb-provenance": {
+      sourceCommit: versionInfo.sourceCommit,
+      sourceTree: versionInfo.sourceTree,
+      sourceRepository: versionInfo.sourceRepository,
+      sourceBaseCommit: versionInfo.sourceBaseCommit,
+      sourceBaseTree: versionInfo.sourceBaseTree,
+    },
   };
 
   return createStringSource(
     "package.json",
     JSON.stringify(npmManifest, null, 2)
   );
+}
+
+function writeDistProvenance(done) {
+  const versionInfo = getVersionJSON();
+  const mapPaths = [
+    `${DIST_DIR}build/pdf.mjs.map`,
+    `${DIST_DIR}build/pdf.worker.mjs.map`,
+    `${DIST_DIR}build/pdf.sandbox.mjs.map`,
+    `${DIST_DIR}legacy/build/pdf.mjs.map`,
+    `${DIST_DIR}legacy/build/pdf.worker.mjs.map`,
+    `${DIST_DIR}legacy/build/pdf.sandbox.mjs.map`,
+  ];
+
+  for (const mapPath of mapPaths) {
+    const sourceMap = JSON.parse(fs.readFileSync(mapPath));
+    sourceMap["x-evb-source-commit"] = versionInfo.sourceCommit;
+    sourceMap["x-evb-source-tree"] = versionInfo.sourceTree;
+    fs.writeFileSync(mapPath, JSON.stringify(sourceMap));
+  }
+  done();
 }
 
 gulp.task(
@@ -2721,6 +2759,17 @@ gulp.task(
 
       return ordered([
         packageJson().pipe(gulp.dest(DIST_DIR)),
+        gulp
+          .src(
+            [
+              "FORK_PROVENANCE.json",
+              "THIRD_PARTY_INVENTORY.json",
+              "NOTICE",
+              "external/brotli/LICENSE_BROTLI",
+            ],
+            { encoding: false }
+          )
+          .pipe(gulp.dest(DIST_DIR)),
         gulp
           .src("external/dist/**/*", {
             base: "external/dist",
@@ -2828,7 +2877,8 @@ gulp.task(
           .src(TYPES_DIR + "**/*", { base: TYPES_DIR, encoding: false })
           .pipe(gulp.dest(DIST_DIR + "types/")),
       ]);
-    }
+    },
+    writeDistProvenance
   )
 );
 
