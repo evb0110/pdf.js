@@ -24,7 +24,7 @@ import {
   COVERAGE_FORMAT_TO_REPORTER,
   parseCoverageFormats,
 } from "./external/ccov/coverage_format.mjs";
-import { exec, execSync, spawn, spawnSync } from "child_process";
+import { exec, execFileSync, execSync, spawn, spawnSync } from "child_process";
 import { finished, pipeline as runPipeline } from "stream/promises";
 import autoprefixer from "autoprefixer";
 import { buildPrefsSchema } from "./external/chromium/prefs.mjs";
@@ -1233,7 +1233,26 @@ function createBuildNumber(done) {
       const version = config.versionPrefix + buildNumber;
 
       exec('git log --format="%h" -n 1', function (err2, stdout2, stderr2) {
-        const buildCommit = !err2 ? stdout2.replace("\n", "") : "";
+        let buildCommit = "";
+        if (!err2) {
+          buildCommit = stdout2.replace("\n", "");
+        }
+        let sourceCommit = "unknown";
+        let sourceTree = "unknown";
+        try {
+          const gitSourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+            encoding: "utf8",
+          }).trim();
+          const gitSourceTree = execFileSync(
+            "git",
+            ["rev-parse", "HEAD^{tree}"],
+            { encoding: "utf8" }
+          ).trim();
+          sourceCommit = gitSourceCommit;
+          sourceTree = gitSourceTree;
+        } catch {
+          // Keep non-Git builds explicit rather than claiming false provenance.
+        }
 
         createStringSource(
           "version.json",
@@ -1242,10 +1261,8 @@ function createBuildNumber(done) {
               version,
               build: buildNumber,
               commit: buildCommit,
-              sourceCommit: execSync("git rev-parse HEAD").toString().trim(),
-              sourceTree: execSync("git rev-parse HEAD^{tree}")
-                .toString()
-                .trim(),
+              sourceCommit,
+              sourceTree,
               sourceRepository: "https://github.com/evb0110/pdf.js.git",
               sourceBaseCommit: "5e0ac85d697d41a2232045033962b3437b7e2ad1",
               sourceBaseTree: "9dbb438c9a4bce5a958ca8b37d305b79b5b74c6a",
@@ -3380,6 +3397,11 @@ function packageJson() {
 
 function writeDistProvenance(done) {
   const versionInfo = getVersionJSON();
+  const provenancePath = `${DIST_DIR}FORK_PROVENANCE.json`;
+  const provenance = JSON.parse(fs.readFileSync(provenancePath));
+  provenance.sourceCommit = versionInfo.sourceCommit;
+  provenance.sourceTree = versionInfo.sourceTree;
+  fs.writeFileSync(provenancePath, JSON.stringify(provenance, null, 2) + "\n");
   const mapPaths = [
     `${DIST_DIR}build/pdf.mjs.map`,
     `${DIST_DIR}build/pdf.worker.mjs.map`,

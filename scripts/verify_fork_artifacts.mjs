@@ -27,6 +27,27 @@ const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
 const sourceTree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], {
   encoding: "utf8",
 }).trim();
+const provenanceKeys = [
+  "sourceCommit",
+  "sourceTree",
+  "sourceRepository",
+  "sourceBaseCommit",
+  "sourceBaseTree",
+];
+
+for (const [name, record] of [
+  ["version", version],
+  ["package provenance", packageJSON["x-evb-provenance"]],
+  ["fork provenance", provenance],
+]) {
+  if (
+    !record ||
+    typeof record !== "object" ||
+    provenanceKeys.some(key => !Object.hasOwn(record, key))
+  ) {
+    throw new Error(`${name} is missing required provenance fields`);
+  }
+}
 
 if (
   version.sourceCommit !== sourceCommit ||
@@ -36,16 +57,18 @@ if (
 }
 if (
   packageJSON.name !== "pdfjs-dist" ||
-  packageJSON.version !== version.version ||
-  packageJSON["x-evb-provenance"].sourceCommit !== sourceCommit
+  packageJSON.version !== version.version
 ) {
   throw new Error("generated package metadata is not provenance-complete");
 }
-if (
-  provenance.sourceBaseCommit !== version.sourceBaseCommit ||
-  provenance.sourceBaseTree !== version.sourceBaseTree
-) {
-  throw new Error("fork provenance does not match the generated build");
+
+for (const key of provenanceKeys) {
+  if (packageJSON["x-evb-provenance"][key] !== version[key]) {
+    throw new Error(`package provenance field ${key} does not match version`);
+  }
+  if (provenance[key] !== version[key]) {
+    throw new Error(`fork provenance field ${key} does not match version`);
+  }
 }
 
 for (const mapPath of [
