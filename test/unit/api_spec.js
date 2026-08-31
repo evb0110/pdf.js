@@ -2888,6 +2888,70 @@ describe("api", function () {
       expect(data.length).toEqual(basicApiFileLength);
     });
 
+    it("gets the full source length with a prefix before the PDF header", async function () {
+      const sourcePdf = await DefaultFileReaderFactory.fetch({
+        path: TEST_PDFS_PATH + basicApiFileName,
+      });
+      const prefix = new TextEncoder().encode("prefix before %PDF-\n");
+      const sourceLength = prefix.length + sourcePdf.length;
+      const prefixedPdf = new Uint8Array(sourceLength);
+      prefixedPdf.set(prefix);
+      prefixedPdf.set(sourcePdf, prefix.length);
+
+      const loadingTask = getDocument(prefixedPdf);
+      const pdfDoc = await loadingTask.promise;
+      const [downloadInfo, data] = await Promise.all([
+        pdfDoc.getDownloadInfo(),
+        pdfDoc.getData(),
+      ]);
+
+      expect(downloadInfo).toEqual({ length: sourceLength });
+      expect(data).toBeInstanceOf(Uint8Array);
+      expect(data.length).toEqual(sourceLength);
+
+      await loadingTask.destroy();
+    });
+
+    it("reports the full source length for a range PDF with a prefix before the PDF header", async function () {
+      const sourcePdf = await DefaultFileReaderFactory.fetch({
+        path: TEST_PDFS_PATH + basicApiFileName,
+      });
+      const prefix = new TextEncoder().encode("prefix before %PDF-\n");
+      const sourceLength = prefix.length + sourcePdf.length;
+      const prefixedPdf = new Uint8Array(sourceLength);
+      prefixedPdf.set(prefix);
+      prefixedPdf.set(sourcePdf, prefix.length);
+
+      const initialDataLength = 65536;
+      const initialData = new Uint8Array(
+        prefixedPdf.subarray(0, initialDataLength)
+      );
+      const transport = new PDFDataRangeTransport(
+        sourceLength,
+        initialData,
+        /* progressiveDone = */ undefined,
+        /* contentDispositionFilename = */ "prefix.pdf"
+      );
+      transport.requestDataRange = (begin, end) => {
+        waitSome(() => {
+          const chunk = new Uint8Array(prefixedPdf.subarray(begin, end));
+          transport.onDataRange(begin, chunk);
+        });
+      };
+
+      const loadingTask = getDocument({
+        range: transport,
+        rangeChunkSize: initialDataLength,
+      });
+      const pdfDoc = await loadingTask.promise;
+      const downloadInfo = await pdfDoc.getDownloadInfo();
+
+      expect(downloadInfo).toEqual({ length: sourceLength });
+      expect(downloadInfo.length).toEqual(prefixedPdf.length);
+
+      await loadingTask.destroy();
+    });
+
     it("gets data from PDF document with JPEG image containing EXIF-data (bug 1942064)", async function () {
       const typedArrayPdf = await DefaultFileReaderFactory.fetch({
         path: TEST_PDFS_PATH + "bug1942064.pdf",

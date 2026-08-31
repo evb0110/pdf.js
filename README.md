@@ -31,13 +31,22 @@ section 4(b). The source is built and published as `@evb0110/pdfjs-dist`.
 | 15 | `src/core/worker.js` | Avoid loading a network stream during recovery and report its declared length. |
 | 16 | `src/core/worker.js` | Reject whole-document materialization for range sources and read ranges without `stream.bytes`. |
 
-After normalizing version metadata and generated formatting, the modern and
-legacy display and worker bundles match the v5.7.284 patched baseline. The
-only semantic differences are the intentional source-port reformulations:
+For the committed 16-edit port, normalizing version metadata and generated
+formatting makes the modern and legacy display and worker bundles match the
+v5.7.284 patched baseline. The only semantic differences in that comparison
+are the intentional source-port reformulations:
 edit 14 uses the `ChunkedStream` capability test needed to avoid the source
 import cycle, edit 16 places its helper at module scope, and the source keeps
 the `TESTING` assertions that production preprocessing removes. The upstream
-license and notices remain in place.
+license and notices remain in place. A post-port CodeRabbit hardening keeps
+bounded recovery's XRef-stream parsing on the existing `readXRef` path,
+preserves incomplete object dictionaries across scan windows, and revalidates
+the one-entry `ensureByte` cache after shared chunks are discarded.
+`NetworkPdfManager` refetches discarded entry chunks through
+`MissingDataException`, so recovery does not retain the whole PDF.
+DataLoaded reports the full source extent for PDFs with bytes before `%PDF-`.
+Range readers keep pending reads open across intermediate transport chunks and
+close only after the final chunk.
 
 ## Contributing
 

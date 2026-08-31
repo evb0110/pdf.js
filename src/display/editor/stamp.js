@@ -129,8 +129,11 @@ class StampEditor extends AnnotationEditor {
       this._uiManager.useNewAltTextFlow &&
       this.#bitmap
     ) {
-      this.addEditToolbar().then(() => {
-        this._editToolbar.hide();
+      this.addEditToolbar().then(toolbar => {
+        if (!toolbar) {
+          return;
+        }
+        toolbar.hide();
         this._uiManager.editAltText(this, /* firstTime = */ true);
       });
       return;

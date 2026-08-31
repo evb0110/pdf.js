@@ -400,7 +400,7 @@ class WorkerMessageHandler {
 
           pdfManager.requestLoadedStream(/* noFetch = */ true).then(
             stream => {
-              handler.send("DataLoaded", { length: stream.length });
+              handler.send("DataLoaded", { length: stream.end });
             },
             () => {
               // Avoid errors if document loading was terminated.

@@ -932,6 +932,69 @@ describe("Stamp Editor", () => {
       await closePages(pages);
     });
 
+    it("must tolerate removing a stamp during toolbar creation", async () => {
+      for (const [browserName, page] of pages) {
+        await switchToStamp(page);
+        await page.waitForFunction(() => !!window.uiManager);
+
+        await page.evaluate(() => {
+          const imageManager = window.uiManager.imageManager;
+          const getFromFile = imageManager.getFromFile.bind(imageManager);
+          let resolveImage;
+          let imageFile;
+          const imagePromise = new Promise(resolve => {
+            resolveImage = resolve;
+          });
+
+          imageManager.getFromFile = file => {
+            imageFile = file;
+            return imagePromise;
+          };
+          window.resolveStampImage = async () => {
+            resolveImage(await getFromFile(imageFile));
+          };
+          window.stampUnhandledRejections = [];
+          window.stampToolbarRemoved = false;
+          window.addEventListener("unhandledrejection", event => {
+            window.stampUnhandledRejections.push(
+              event.reason?.message || String(event.reason)
+            );
+            event.preventDefault();
+          });
+        });
+
+        const data = fs
+          .readFileSync(path.join(__dirname, "../images/firefox_logo.png"))
+          .toString("base64");
+        await copyToClipboard(page, {
+          "image/png": `data:image/png;base64,${data}`,
+        });
+        await pasteFromClipboard(page);
+
+        const editorSelector = getEditorSelector(0);
+        await page.waitForSelector(editorSelector);
+        await page.evaluate(() => {
+          const editor = [...window.uiManager.getEditors(0)][0];
+          editor.addEditToolbar = async () => {
+            editor.remove();
+            window.stampToolbarRemoved = true;
+            return null;
+          };
+          window.resolveStampImage();
+        });
+        await page.waitForFunction(() => window.stampToolbarRemoved);
+
+        await page.waitForSelector(editorSelector, { hidden: true });
+
+        const unhandledRejections = await page.evaluate(
+          () => window.stampUnhandledRejections
+        );
+        expect(unhandledRejections)
+          .withContext(`In ${browserName}`)
+          .toEqual([]);
+      }
+    });
+
     it("must check the new alt text flow (part 1)", async () => {
       // Run sequentially to avoid clipboard issues.
       for (const [browserName, page] of pages) {
