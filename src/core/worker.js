@@ -395,7 +395,7 @@ class WorkerMessageHandler {
           pdfManager = newPdfManager;
 
           pdfManager.requestLoadedStream(/* noFetch = */ true).then(stream => {
-            handler.send("DataLoaded", { length: stream.length });
+            handler.send("DataLoaded", { length: stream.end });
           });
         })
         .then(pdfManagerReady, onFailure);

@@ -13,9 +13,9 @@
  * limitations under the License.
  */
 
+import { arrayBuffersToBytes, MissingDataException } from "./core_utils.js";
 import { assert } from "../shared/util.js";
 import { MathClamp } from "../shared/math_clamp.js";
-import { MissingDataException } from "./core_utils.js";
 import { Stream } from "./stream.js";
 
 class ChunkedStream extends Stream {
@@ -56,8 +56,15 @@ class ChunkedStream extends Stream {
       );
       let target = this._storedChunks.get(chunk);
       if (!target) {
-        if (targetOffset === 0 && copyLength === chunkLength) {
-          target = bytes.subarray(sourceOffset, sourceOffset + copyLength);
+        if (
+          targetOffset === 0 &&
+          sourceOffset === 0 &&
+          copyLength === chunkLength &&
+          copyLength === bytes.byteLength &&
+          bytes.byteOffset === 0 &&
+          bytes.byteLength === bytes.buffer.byteLength
+        ) {
+          target = bytes;
         } else {
           target = new Uint8Array(chunkLength);
           target.set(
@@ -207,11 +214,12 @@ class ChunkedStream extends Stream {
     if (chunk > this.numChunks) {
       return;
     }
-    if (chunk === this._lastSuccessfulEnsureByteChunk) {
+    const isLoaded = this._loadedChunks.has(chunk);
+    if (chunk === this._lastSuccessfulEnsureByteChunk && isLoaded) {
       return;
     }
 
-    if (!this._loadedChunks.has(chunk)) {
+    if (!isLoaded) {
       throw new MissingDataException(pos, pos + 1);
     }
     this._lastSuccessfulEnsureByteChunk = chunk;
@@ -409,6 +417,23 @@ class ChunkedStreamManager {
     const rangeReader = this.pdfStream.getRangeReader(begin, end);
     let nextBegin = begin;
     let receivedBytes = 0;
+    let chunks = [];
+    let chunksLength = 0;
+
+    const flush = () => {
+      if (chunksLength === 0) {
+        return;
+      }
+      const data = arrayBuffersToBytes(chunks);
+      chunks = [];
+      chunksLength = 0;
+      this.onReceiveData({
+        chunk: data.buffer,
+        begin: nextBegin,
+      });
+      nextBegin += data.byteLength;
+      receivedBytes += data.byteLength;
+    };
 
     while (true) {
       const { value, done } = await rangeReader.read();
@@ -428,18 +453,34 @@ class ChunkedStreamManager {
       if (value.byteLength === 0) {
         continue;
       }
-      const nextEnd = nextBegin + value.byteLength;
-      if (nextEnd > end) {
+      const nextEnd = nextBegin + chunksLength + value.byteLength;
+      if (nextEnd > this.length) {
         throw new Error(
-          `Range reader returned data beyond the requested end: ${nextEnd} > ${end}`
+          `Range reader returned data beyond the stream end: ${nextEnd} > ${this.length}`
         );
       }
-      this.onReceiveData({
-        chunk: value,
-        begin: nextBegin,
-      });
-      nextBegin = nextEnd;
-      receivedBytes += value.byteLength;
+
+      let valueOffset = 0;
+      while (valueOffset < value.byteLength) {
+        const chunkEnd = Math.min(
+          this.chunkSize - ((nextBegin + chunksLength) % this.chunkSize)
+        );
+        const length = Math.min(value.byteLength - valueOffset, chunkEnd);
+        chunks.push(
+          valueOffset === 0 && length === value.byteLength
+            ? value
+            : value.slice(valueOffset, valueOffset + length)
+        );
+        chunksLength += length;
+        valueOffset += length;
+
+        if (
+          chunksLength === this.chunkSize ||
+          nextBegin + chunksLength === this.length
+        ) {
+          flush();
+        }
+      }
     }
 
     if (receivedBytes === 0 && this.disableAutoFetch) {
@@ -447,7 +488,12 @@ class ChunkedStreamManager {
       // in the `src/display/api.js` file.
       return;
     }
-    if (nextBegin !== end) {
+    if (chunksLength > 0) {
+      throw new Error(
+        `Range reader ended with an incomplete chunk at ${nextBegin + chunksLength}`
+      );
+    }
+    if (nextBegin < end) {
       throw new Error(
         `Range reader ended before the requested end: ${nextBegin} < ${end}`
       );

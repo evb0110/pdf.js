@@ -226,11 +226,10 @@ class PDFDataTransportStreamRangeReader extends BasePDFStreamRangeReader {
     } else {
       const capability = this._requests.shift();
       capability.resolve({ value: chunk, done: false });
-
-      this.#endRequests();
     }
     if (isLast) {
       this._done = true;
+      this.#endRequests();
       this.onDone?.();
     }
   }

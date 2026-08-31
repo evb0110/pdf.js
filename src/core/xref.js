@@ -408,6 +408,8 @@ class XRef {
   }
 
   indexObjects() {
+    // NetworkPdfManager is the production owner of ChunkedStream. Checking
+    // the stream here avoids importing pdf_manager.js and creating a cycle.
     if (this.stream instanceof ChunkedStream) {
       return this.indexObjectsBounded();
     }
@@ -716,6 +718,7 @@ class XRef {
   indexObjectsBounded() {
     const SCAN_WINDOW_BYTES = 1024 * 1024;
     const HEADER_OVERLAP_BYTES = 64;
+    const OBJECT_MARKER_OVERLAP_BYTES = 8;
     const stream = this.stream;
     const length = stream.end;
     const objectHeaderRegExp = /(\d{1,20})\s+(\d{1,20})\s+obj\b/g;
@@ -725,6 +728,9 @@ class XRef {
       position: stream.start,
       trailers: [],
       trailerOffsets: new Set(),
+      xrefStreams: new Set(),
+      xrefStreamsParsed: new Set(),
+      pendingObject: null,
       scanned: false,
     });
     const isWhitespace = byte =>
@@ -734,6 +740,21 @@ class XRef {
       byte === 0x0c ||
       byte === 0x0d ||
       byte === 0x20;
+    // Keep only a short suffix while an object dictionary spans windows.
+    const scanObject = (text, tail = "") => {
+      const object = tail + text;
+      const objectEnd = object.indexOf("endobj");
+      const streamOffset = object.search(/\bstream\b/);
+      let endOffset = streamOffset;
+      if (objectEnd >= 0 && (streamOffset < 0 || objectEnd < streamOffset)) {
+        endOffset = objectEnd;
+      }
+      const xrefOffset = object.search(/\/XRef\b/);
+      return {
+        hasXRef: xrefOffset >= 0 && (endOffset < 0 || xrefOffset < endOffset),
+        tail: endOffset < 0 ? object.slice(-OBJECT_MARKER_OVERLAP_BYTES) : null,
+      };
+    };
 
     if (isNewRecovery) {
       this.entries.length = 0;
@@ -758,6 +779,20 @@ class XRef {
       const buffer = stream.getByteRange(windowBegin, windowEnd);
       const bufferStr = bytesToString(buffer);
 
+      if (recoveryState.pendingObject) {
+        const pendingObject = recoveryState.pendingObject;
+        const result = scanObject(
+          bufferStr.slice(position - windowBegin),
+          pendingObject.tail
+        );
+        if (result.hasXRef) {
+          recoveryState.xrefStreams.add(pendingObject.offset);
+        }
+        recoveryState.pendingObject = result.tail
+          ? { offset: pendingObject.offset, tail: result.tail }
+          : null;
+      }
+
       objectHeaderRegExp.lastIndex = 0;
       let match;
       while ((match = objectHeaderRegExp.exec(bufferStr)) !== null) {
@@ -770,11 +805,42 @@ class XRef {
         if (!Number.isSafeInteger(num) || !Number.isSafeInteger(gen)) {
           continue;
         }
-        this.entries[num] = {
-          offset: windowBegin + matchOffset - stream.start,
-          gen,
-          uncompressed: true,
-        };
+        const objectOffset = windowBegin + matchOffset - stream.start;
+        let updateEntry = !this.entries[num];
+        if (!updateEntry && this.entries[num].gen === gen) {
+          try {
+            const parser = new Parser({
+              lexer: new Lexer(
+                stream.makeSubStream(
+                  objectOffset + stream.start + match[0].length
+                )
+              ),
+            });
+            parser.getObj();
+            updateEntry = true;
+          } catch (ex) {
+            if (ex instanceof ParserEOFException) {
+              warn(`indexObjects -- checking object (${match[0]}): "${ex}".`);
+            } else {
+              updateEntry = true;
+            }
+          }
+        }
+        if (updateEntry) {
+          this.entries[num] = {
+            offset: objectOffset,
+            gen,
+            uncompressed: true,
+          };
+        }
+
+        const result = scanObject(bufferStr.slice(matchOffset));
+        if (result.hasXRef) {
+          recoveryState.xrefStreams.add(objectOffset);
+        }
+        recoveryState.pendingObject = result.tail
+          ? { offset: objectOffset, tail: result.tail }
+          : null;
       }
 
       trailerRegExp.lastIndex = 0;
@@ -796,6 +862,18 @@ class XRef {
       recoveryState.position = position + SCAN_WINDOW_BYTES;
     }
     recoveryState.scanned = true;
+
+    for (const xrefStream of recoveryState.xrefStreams) {
+      if (recoveryState.xrefStreamsParsed.has(xrefStream)) {
+        continue;
+      }
+      this._xrefStms.add(xrefStream);
+      if (!this.startXRefQueue.includes(xrefStream)) {
+        this.startXRefQueue.push(xrefStream);
+      }
+      this.readXRef(/* recoveryMode = */ true);
+      recoveryState.xrefStreamsParsed.add(xrefStream);
+    }
 
     const trailerDicts = [];
     let isEncrypted = false;
