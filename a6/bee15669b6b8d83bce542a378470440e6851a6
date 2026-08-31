@@ -1,0 +1,70 @@
+src/core/chunked_stream.js
+  s_5e6315dcf30160::t_569c2d32ec9dc1 15
+src/display/text_layer.js
+  s_5e6315dcf30160::t_7af3bf2fc3c972 15
+src/display/api.js
+  s_5e6315dcf30160::t_7af3bf2fc3c972 15
+README.md
+  s_5e6315dcf30160::t_9b3e9768fe7869 16-33,57-61,72,74,84-88,114,120,151-153,159,166,170,174,180,184,188
+  s_5e6315dcf30160::t_3b6682235d1422 139-141
+  s_5e6315dcf30160::t_569c2d32ec9dc1 13-14
+src/core/evaluator.js
+  s_5e6315dcf30160::t_7af3bf2fc3c972 15
+src/display/editor/editor.js
+  s_5e6315dcf30160::t_7af3bf2fc3c972 15
+scripts/verify_fork_artifacts.mjs
+  s_5e6315dcf30160::t_9f5734f7653c7f 43-56
+  s_5e6315dcf30160::t_19dcfc71c2ddd4 1-30,35-36,41-42,61-81
+  s_5e6315dcf30160::t_0c0498efecd286 31-34
+  s_5e6315dcf30160::t_9b3e9768fe7869 37-40,57-60
+NOTICE
+  s_5e6315dcf30160::t_569c2d32ec9dc1 1-10
+src/display/canvas.js
+  s_5e6315dcf30160::t_7af3bf2fc3c972 15
+test/unit/stream_spec.js
+  s_5e6315dcf30160::t_569c2d32ec9dc1 15
+test/integration/stamp_editor_spec.mjs
+  s_5e6315dcf30160::t_569c2d32ec9dc1 15
+src/core/xref.js
+  s_5e6315dcf30160::t_569c2d32ec9dc1 15
+test/unit/api_spec.js
+  s_5e6315dcf30160::t_569c2d32ec9dc1 15
+src/display/editor/stamp.js
+  s_5e6315dcf30160::t_569c2d32ec9dc1 15
+THIRD_PARTY_INVENTORY.json
+  s_5e6315dcf30160::t_569c2d32ec9dc1 1-4,52-54
+  s_5e6315dcf30160::t_a36c0d86500268 5-51
+src/core/worker.js
+  s_5e6315dcf30160::t_569c2d32ec9dc1 15
+src/display/transport_stream.js
+  s_5e6315dcf30160::t_569c2d32ec9dc1 15
+FORK_PROVENANCE.json
+  s_5e6315dcf30160::t_569c2d32ec9dc1 1-7,15
+  s_5e6315dcf30160::t_a36c0d86500268 8-14
+gulpfile.mjs
+  s_5e6315dcf30160::t_8bcb207b84de8c 2730-2731,2737-2754,2891-2892
+  s_5e6315dcf30160::t_b83e487cc16ac6 286,305-306,1050
+  s_5e6315dcf30160::t_9b3e9768fe7869 1036
+  s_5e6315dcf30160::t_9a5548a5ead312 1032-1035,1037-1039,1048-1049
+  s_5e6315dcf30160::t_5b1acbaed1a98c 2676-2677,2716-2720
+  s_5e6315dcf30160::t_246f01482b3232 2679,2715,2721
+  s_5e6315dcf30160::t_4d935b5ed22b4e 2732-2736
+  s_5e6315dcf30160::t_a610f6442eb9ee 661,2773-2783
+  s_5e6315dcf30160::t_a36c0d86500268 1051-1052
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "a6bee15669b6b8d83bce542a378470440e6851a6",
+  "prompts": {},
+  "sessions": {
+    "s_5e6315dcf30160": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05773-caa1-7831-873d-23cfcc28f0df",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": null
+    }
+  }
+}
