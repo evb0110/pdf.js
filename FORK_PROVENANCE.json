@@ -1,0 +1,15 @@
+{
+  "fork": "EVB Viewer",
+  "sourceRepository": "https://github.com/evb0110/pdf.js.git",
+  "sourceVersion": "5.7.284",
+  "sourceBaseCommit": "5e0ac85d697d41a2232045033962b3437b7e2ad1",
+  "sourceBaseTree": "9dbb438c9a4bce5a958ca8b37d305b79b5b74c6a",
+  "generatedPackage": "pdfjs-dist",
+  "provenanceFields": [
+    "sourceCommit",
+    "sourceTree",
+    "sourceRepository",
+    "sourceBaseCommit",
+    "sourceBaseTree"
+  ]
+}

@@ -1,0 +1,10 @@
+EVB Viewer fork notice
+
+This distribution is a modified fork of Mozilla's PDF.js version 5.7.284.
+The fork source repository is https://github.com/evb0110/pdf.js.git.
+The upstream PDF.js license and notices remain in LICENSE and in the bundled
+component license files. THIRD_PARTY_INVENTORY.json lists bundled components
+and the license files shipped with them.
+
+This fork does not authorize or perform npm publication. The generated package
+name is pdfjs-dist for compatibility with existing PDF.js consumers.
