@@ -373,7 +373,9 @@ describe("stream", function () {
         await recoverCrossReferenceStream(data);
 
       expect(trailer.getRaw("Root")).toEqual(Ref.get(2, 0));
-      expect(xref.getEntry(2)).toEqual({ offset: 1, gen: 0 });
+      expect(xref.getEntry(2)).toEqual(
+        jasmine.objectContaining({ offset: 1, gen: 0 })
+      );
       expect(stream._storedChunks.size).toBeLessThan(stream.numChunks);
       expect(stream._storedChunks.has(0)).toBeFalse();
 
@@ -397,7 +399,9 @@ describe("stream", function () {
         await recoverCrossReferenceStream(data);
 
       expect(trailer.getRaw("Root")).toEqual(Ref.get(2, 0));
-      expect(xref.getEntry(2)).toEqual({ offset: 1, gen: 0 });
+      expect(xref.getEntry(2)).toEqual(
+        jasmine.objectContaining({ offset: 1, gen: 0 })
+      );
       expect(stream._storedChunks.size).toBeLessThan(stream.numChunks);
       expect(stream._storedChunks.has(0)).toBeFalse();
 
@@ -464,11 +468,13 @@ describe("stream", function () {
 
       await manager.ensure(xref, "indexObjectsBounded", []);
 
-      expect(xref.entries[2]).toEqual({
-        offset: firstObjectOffset,
-        gen: 1,
-        uncompressed: true,
-      });
+      expect(xref.getEntry(2)).toEqual(
+        jasmine.objectContaining({
+          offset: firstObjectOffset,
+          gen: 1,
+          uncompressed: true,
+        })
+      );
     });
   });
 

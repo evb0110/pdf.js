@@ -22,7 +22,6 @@ import {
   isNodeJS,
   PasswordException,
   setVerbosityLevel,
-  stringToPDFString,
   UnknownErrorException,
   VerbosityLevel,
   warn,
@@ -380,8 +379,12 @@ class WorkerMessageHandler {
           }
           if (pdfManager instanceof NetworkPdfManager) {
             loadDocument(true).then(onSuccess, onFailure);
-          }, onFailure);
-          }, onFailure);
+          } else {
+            pdfManager.requestLoadedStream().then(function () {
+              ensureNotTerminated();
+              loadDocument(true).then(onSuccess, onFailure);
+            }, onFailure);
+          }
         });
       }
 

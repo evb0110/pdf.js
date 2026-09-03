@@ -779,10 +779,10 @@ class XRef {
     };
 
     if (isNewRecovery) {
-      this.entries.length = 0;
-      this._cacheMap.clear();
-      this._xrefStms.clear();
-      delete this.tableState;
+      this.#entries.length = 0;
+      this.#cacheMap.clear();
+      this.#xrefStms.clear();
+      delete this._tableState;
       delete this.streamState;
       this.topDict = null;
       this.startXRefQueue = [];
@@ -828,8 +828,8 @@ class XRef {
           continue;
         }
         const objectOffset = windowBegin + matchOffset - stream.start;
-        let updateEntry = !this.entries[num];
-        if (!updateEntry && this.entries[num].gen === gen) {
+        let updateEntry = !this.#entries[num];
+        if (!updateEntry && this.#entries[num].gen === gen) {
           try {
             const parser = new Parser({
               lexer: new Lexer(
@@ -849,7 +849,7 @@ class XRef {
           }
         }
         if (updateEntry) {
-          this.entries[num] = {
+          this.#entries[num] = {
             offset: objectOffset,
             gen,
             uncompressed: true,
@@ -889,7 +889,7 @@ class XRef {
       if (recoveryState.xrefStreamsParsed.has(xrefStream)) {
         continue;
       }
-      this._xrefStms.add(xrefStream);
+      this.#xrefStms.add(xrefStream);
       if (!this.startXRefQueue.includes(xrefStream)) {
         this.startXRefQueue.push(xrefStream);
       }
@@ -968,8 +968,8 @@ class XRef {
       return this.topDict;
     }
     if (!trailerDicts.length) {
-      for (const num in this.entries) {
-        const entry = this.entries[num];
+      for (const num in this.#entries) {
+        const entry = this.#entries[num];
         if (!entry) {
           continue;
         }
