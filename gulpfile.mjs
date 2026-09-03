@@ -3412,6 +3412,9 @@ function writeDistProvenance(done) {
   ];
 
   for (const mapPath of mapPaths) {
+    if (!fs.existsSync(mapPath)) {
+      throw new Error(`Missing required source map for fork provenance: ${mapPath}`);
+    }
     const sourceMap = JSON.parse(fs.readFileSync(mapPath));
     sourceMap["x-evb-source-commit"] = versionInfo.sourceCommit;
     sourceMap["x-evb-source-tree"] = versionInfo.sourceTree;

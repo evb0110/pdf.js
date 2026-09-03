@@ -634,6 +634,7 @@ class PDFDataRangeTransport {
   /**
    * @param {number} begin
    * @param {Uint8Array|null} chunk
+   * @param {boolean} [isLast] - Whether this is the final chunk.
    */
   onDataRange(begin, chunk, isLast = true) {
     this.#listener({ type: "range", begin, chunk, isLast });

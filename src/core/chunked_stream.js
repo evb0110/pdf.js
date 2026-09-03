@@ -448,10 +448,12 @@ class ChunkedStreamManager {
 
       let valueOffset = 0;
       while (valueOffset < value.byteLength) {
-        const chunkEnd = Math.min(
-          this.chunkSize - ((nextBegin + chunksLength) % this.chunkSize)
+        const bytesToChunkBoundary =
+          this.chunkSize - ((nextBegin + chunksLength) % this.chunkSize);
+        const length = Math.min(
+          value.byteLength - valueOffset,
+          bytesToChunkBoundary
         );
-        const length = Math.min(value.byteLength - valueOffset, chunkEnd);
         chunks.push(
           valueOffset === 0 && length === value.byteLength
             ? value

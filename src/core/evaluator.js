@@ -43,6 +43,7 @@ import { ErrorFont, Font } from "./fonts.js";
 import {
   fetchBinaryData,
   IDENTITY_MATRIX,
+  MissingDataException,
   isNumberArray,
   lookupMatrix,
   lookupNormalRect,
@@ -1310,6 +1311,9 @@ class PartialEvaluator {
       preEvaluatedFont = this.preEvaluateFont(font);
       preEvaluatedFont.cssFontInfo = cssFontInfo;
     } catch (reason) {
+      if (reason instanceof MissingDataException) {
+        throw reason;
+      }
       warn(`loadFont - preEvaluateFont failed: "${reason}".`);
       return errorFont();
     }
