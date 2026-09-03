@@ -1,0 +1,24 @@
+src/core/xref.js
+  s_7a146c99865f02::t_0394aacb9bcc0c 971-972
+  s_7a146c99865f02::t_c433b1741484b6 782-785,831-832,852,892
+test/unit/stream_spec.js
+  s_7a146c99865f02::t_89d4881f7e4f84 376-378,402-404,471-477
+src/core/worker.js
+  s_7a146c99865f02::t_2fff7e1841abae 382-387
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "0fc0870acd17e4e06d2388d79f575d908b15f903",
+  "prompts": {},
+  "sessions": {
+    "s_7a146c99865f02": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a065f2-b269-7b12-83bc-2e8f51872112",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "Eugene Barsky <34789976+evb0110@users.noreply.github.com>"
+    }
+  }
+}
