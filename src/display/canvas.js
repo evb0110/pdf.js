@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 import {
   CanvasNestedDependencyTracker,
@@ -832,7 +833,7 @@ class CanvasGraphics {
     }
   }
 
-  _scaleImage(img, inverseTransform) {
+  _scaleImage(img, inverseTransform, prescaleThreshold = 2) {
     // Vertical or horizontal scaling shall not be more than 2 to not lose the
     // pixels during drawImage operation, painting on the temporary canvas(es)
     // that are twice smaller in size.
@@ -855,14 +856,17 @@ class CanvasGraphics {
       hs = heightScale,
       pw = width,
       ph = height;
-    while ((ws > 2 && pw > 1) || (hs > 2 && ph > 1)) {
+    while (
+      (ws > prescaleThreshold && pw > 1) ||
+      (hs > prescaleThreshold && ph > 1)
+    ) {
       let nw = pw,
         nh = ph;
-      if (ws > 2 && pw > 1) {
+      if (ws > prescaleThreshold && pw > 1) {
         nw = Math.ceil(pw / 2);
         ws /= pw / nw;
       }
-      if (hs > 2 && ph > 1) {
+      if (hs > prescaleThreshold && ph > 1) {
         nh = Math.ceil(ph / 2);
         hs /= ph / nh;
       }
@@ -1023,7 +1027,8 @@ class CanvasGraphics {
       // Pre-scale if needed to improve image smoothing.
       const scaleResult = this._scaleImage(
         maskCanvas.canvas,
-        getCurrentTransformInverse(fillCtx)
+        getCurrentTransformInverse(fillCtx),
+        4 / 3
       );
       scaled = scaleResult.img;
       scaledEntry = scaleResult.tmpCanvas;

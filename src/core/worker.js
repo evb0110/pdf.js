@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 import {
   AbortException,
@@ -21,6 +22,7 @@ import {
   isNodeJS,
   PasswordException,
   setVerbosityLevel,
+  UnknownErrorException,
   VerbosityLevel,
   warn,
 } from "../shared/util.js";
@@ -66,6 +68,22 @@ class WorkerTask {
       throw new Error("Worker task was terminated");
     }
   }
+}
+
+function throwIfRangeSourceMaterializationUnsupported(pdfManager, operation) {
+  if (!(pdfManager instanceof NetworkPdfManager)) {
+    return;
+  }
+  const error = new UnknownErrorException(
+    `PDF.js ${operation} cannot materialize a range-backed document; use a native path operation.`,
+    {
+      code: "native-save-required",
+      operation,
+    }
+  );
+  error.code = "native-save-required";
+  error.operation = operation;
+  throw error;
 }
 
 class WorkerMessageHandler {
@@ -359,11 +377,14 @@ class WorkerMessageHandler {
             onFailure(reason);
             return;
           }
-          pdfManager.requestLoadedStream().then(function () {
-            ensureNotTerminated();
-
+          if (pdfManager instanceof NetworkPdfManager) {
             loadDocument(true).then(onSuccess, onFailure);
-          }, onFailure);
+          } else {
+            pdfManager.requestLoadedStream().then(function () {
+              ensureNotTerminated();
+              loadDocument(true).then(onSuccess, onFailure);
+            }, onFailure);
+          }
         });
       }
 
@@ -383,7 +404,7 @@ class WorkerMessageHandler {
 
           pdfManager.requestLoadedStream(/* noFetch = */ true).then(
             stream => {
-              handler.send("DataLoaded", { length: stream.bytes.byteLength });
+              handler.send("DataLoaded", { length: stream.end });
             },
             () => {
               // Avoid errors if document loading was terminated.
@@ -550,9 +571,11 @@ class WorkerMessageHandler {
       return pdfManager.ensureCatalog("markInfo");
     });
 
-    handler.on("GetData", async function () {
-      const stream = await pdfManager.requestLoadedStream();
-      return stream.bytes;
+    handler.on("GetData", function (data) {
+      throwIfRangeSourceMaterializationUnsupported(pdfManager, "GetData");
+      return pdfManager
+        .requestLoadedStream()
+        .then(stream => stream.getByteRange(0, stream.end));
     });
 
     handler.on("GetAnnotations", async function ({ pageIndex, intent }) {
@@ -688,6 +711,10 @@ class WorkerMessageHandler {
     handler.on(
       "SaveDocument",
       async function ({ isPureXfa, numPages, annotationStorage, filename }) {
+        throwIfRangeSourceMaterializationUnsupported(
+          pdfManager,
+          "SaveDocument"
+        );
         const globalPromises = [
           pdfManager.requestLoadedStream(),
           pdfManager.ensureCatalog("acroForm"),
@@ -812,11 +839,11 @@ class WorkerMessageHandler {
         if (isPureXfa) {
           xfaData = refs[0];
           if (!xfaData) {
-            return stream.bytes;
+            return stream.getByteRange(0, stream.end);
           }
         } else if (changes.size === 0) {
           // No new refs so just return the initial bytes
-          return stream.bytes;
+          return stream.getByteRange(0, stream.end);
         }
 
         const needAppearances =
@@ -868,7 +895,7 @@ class WorkerMessageHandler {
         }
 
         return incrementalUpdate({
-          originalData: stream.bytes,
+          originalData: stream.getByteRange(0, stream.end),
           xrefInfo: newXrefInfo,
           changes,
           xref,

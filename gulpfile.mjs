@@ -24,7 +24,7 @@ import {
   COVERAGE_FORMAT_TO_REPORTER,
   parseCoverageFormats,
 } from "./external/ccov/coverage_format.mjs";
-import { exec, execSync, spawn, spawnSync } from "child_process";
+import { exec, execFileSync, execSync, spawn, spawnSync } from "child_process";
 import { finished, pipeline as runPipeline } from "stream/promises";
 import autoprefixer from "autoprefixer";
 import { buildPrefsSchema } from "./external/chromium/prefs.mjs";
@@ -322,7 +322,7 @@ function createWebpackConfig(
 ) {
   const versionInfo = !disableVersionInfo
     ? getVersionJSON()
-    : { version: 0, commit: 0 };
+    : { version: 0, commit: 0, sourceCommit: 0, sourceTree: 0 };
   const bundleDefines = {
     ...defines,
     BUNDLE_VERSION: versionInfo.version,
@@ -341,6 +341,8 @@ function createWebpackConfig(
     "/**",
     ` * pdfjsVersion = ${versionInfo.version}`,
     ` * pdfjsBuild = ${versionInfo.commit}`,
+    ` * pdfjsSourceCommit = ${versionInfo.sourceCommit}`,
+    ` * pdfjsSourceTree = ${versionInfo.sourceTree}`,
     " */",
   ].join("\n");
   const enableSourceMaps =
@@ -740,6 +742,7 @@ function createWasmBundle({ includeQuickJS = true } = {}) {
         [
           "external/quickjs/quickjs-eval.js",
           "external/quickjs/quickjs-eval.wasm",
+          "external/quickjs/README.md",
         ],
         {
           base: "external/quickjs",
@@ -1230,7 +1233,26 @@ function createBuildNumber(done) {
       const version = config.versionPrefix + buildNumber;
 
       exec('git log --format="%h" -n 1', function (err2, stdout2, stderr2) {
-        const buildCommit = !err2 ? stdout2.replace("\n", "") : "";
+        let buildCommit = "";
+        if (!err2) {
+          buildCommit = stdout2.replace("\n", "");
+        }
+        let sourceCommit = "unknown";
+        let sourceTree = "unknown";
+        try {
+          const gitSourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+            encoding: "utf8",
+          }).trim();
+          const gitSourceTree = execFileSync(
+            "git",
+            ["rev-parse", "HEAD^{tree}"],
+            { encoding: "utf8" }
+          ).trim();
+          sourceCommit = gitSourceCommit;
+          sourceTree = gitSourceTree;
+        } catch {
+          // Keep non-Git builds explicit rather than claiming false provenance.
+        }
 
         createStringSource(
           "version.json",
@@ -1239,6 +1261,11 @@ function createBuildNumber(done) {
               version,
               build: buildNumber,
               commit: buildCommit,
+              sourceCommit,
+              sourceTree,
+              sourceRepository: "https://github.com/evb0110/pdf.js.git",
+              sourceBaseCommit: "5e0ac85d697d41a2232045033962b3437b7e2ad1",
+              sourceBaseTree: "9dbb438c9a4bce5a958ca8b37d305b79b5b74c6a",
             },
             null,
             2
@@ -3314,14 +3341,15 @@ gulp.task(
 );
 
 function packageJson() {
-  const VERSION = getVersionJSON().version;
+  const versionInfo = getVersionJSON();
+  const VERSION = versionInfo.version;
 
   const DIST_NAME = "pdfjs-dist";
-  const DIST_DESCRIPTION = "Generic build of Mozilla's PDF.js library.";
+  const DIST_DESCRIPTION = "EVB Viewer fork of Mozilla's PDF.js library.";
   const DIST_KEYWORDS = ["Mozilla", "pdf", "pdf.js"];
-  const DIST_HOMEPAGE = "https://mozilla.github.io/pdf.js/";
-  const DIST_BUGS_URL = "https://github.com/mozilla/pdf.js/issues";
-  const DIST_GIT_URL = "https://github.com/mozilla/pdf.js.git";
+  const DIST_HOMEPAGE = "https://github.com/evb0110/pdf.js";
+  const DIST_BUGS_URL = "https://github.com/evb0110/pdf.js/issues";
+  const DIST_GIT_URL = "https://github.com/evb0110/pdf.js.git";
   const DIST_LICENSE = "Apache-2.0";
 
   const npmManifest = {
@@ -3352,12 +3380,47 @@ function packageJson() {
       node: ">=22.13.0 || >=24",
     },
     scripts: {},
+    "x-evb-provenance": {
+      sourceCommit: versionInfo.sourceCommit,
+      sourceTree: versionInfo.sourceTree,
+      sourceRepository: versionInfo.sourceRepository,
+      sourceBaseCommit: versionInfo.sourceBaseCommit,
+      sourceBaseTree: versionInfo.sourceBaseTree,
+    },
   };
 
   return createStringSource(
     "package.json",
     JSON.stringify(npmManifest, null, 2)
   );
+}
+
+function writeDistProvenance(done) {
+  const versionInfo = getVersionJSON();
+  const provenancePath = `${DIST_DIR}FORK_PROVENANCE.json`;
+  const provenance = JSON.parse(fs.readFileSync(provenancePath));
+  provenance.sourceCommit = versionInfo.sourceCommit;
+  provenance.sourceTree = versionInfo.sourceTree;
+  fs.writeFileSync(provenancePath, JSON.stringify(provenance, null, 2) + "\n");
+  const mapPaths = [
+    `${DIST_DIR}build/pdf.mjs.map`,
+    `${DIST_DIR}build/pdf.worker.mjs.map`,
+    `${DIST_DIR}build/pdf.sandbox.mjs.map`,
+    `${DIST_DIR}legacy/build/pdf.mjs.map`,
+    `${DIST_DIR}legacy/build/pdf.worker.mjs.map`,
+    `${DIST_DIR}legacy/build/pdf.sandbox.mjs.map`,
+  ];
+
+  for (const mapPath of mapPaths) {
+    if (!fs.existsSync(mapPath)) {
+      throw new Error(`Missing required source map for fork provenance: ${mapPath}`);
+    }
+    const sourceMap = JSON.parse(fs.readFileSync(mapPath));
+    sourceMap["x-evb-source-commit"] = versionInfo.sourceCommit;
+    sourceMap["x-evb-source-tree"] = versionInfo.sourceTree;
+    fs.writeFileSync(mapPath, JSON.stringify(sourceMap));
+  }
+  done();
 }
 
 gulp.task(
@@ -3378,6 +3441,17 @@ gulp.task(
 
       return ordered([
         packageJson().pipe(gulp.dest(DIST_DIR)),
+        gulp
+          .src(
+            [
+              "FORK_PROVENANCE.json",
+              "THIRD_PARTY_INVENTORY.json",
+              "NOTICE",
+              "external/brotli/LICENSE_BROTLI",
+            ],
+            { encoding: false }
+          )
+          .pipe(gulp.dest(DIST_DIR)),
         gulp
           .src("external/dist/**/*", {
             base: "external/dist",
@@ -3485,7 +3559,8 @@ gulp.task(
           .src(TYPES_DIR + "**/*", { base: TYPES_DIR, encoding: false })
           .pipe(gulp.dest(DIST_DIR + "types/")),
       ]);
-    }
+    },
+    writeDistProvenance
   )
 );
 

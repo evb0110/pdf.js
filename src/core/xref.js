@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 import {
   assert,
@@ -30,6 +31,7 @@ import {
   XRefParseException,
 } from "./core_utils.js";
 import { BaseStream } from "./base_stream.js";
+import { ChunkedStream } from "./chunked_stream.js";
 import { CipherTransformFactory } from "./crypto.js";
 
 class XRef {
@@ -427,6 +429,12 @@ class XRef {
   }
 
   indexObjects() {
+    // NetworkPdfManager is the production owner of ChunkedStream. Checking
+    // the stream here avoids importing pdf_manager.js and creating a cycle.
+    if (this.stream instanceof ChunkedStream) {
+      return this.indexObjectsBounded();
+    }
+
     // Simple scan through the PDF content to find objects,
     // trailers and XRef streams.
     const TAB = 0x9,
@@ -726,6 +734,262 @@ class XRef {
     }
 
     // nothing helps
+    throw new InvalidPDFException("Invalid PDF structure.");
+  }
+
+  indexObjectsBounded() {
+    const SCAN_WINDOW_BYTES = 1024 * 1024;
+    const HEADER_OVERLAP_BYTES = 64;
+    const OBJECT_MARKER_OVERLAP_BYTES = 8;
+    const stream = this.stream;
+    const length = stream.end;
+    const objectHeaderRegExp = /(\d{1,20})\s+(\d{1,20})\s+obj\b/g;
+    const trailerRegExp = /\btrailer\b/g;
+    const isNewRecovery = !this._boundedRecoveryState;
+    const recoveryState = (this._boundedRecoveryState ||= {
+      position: stream.start,
+      trailers: [],
+      trailerOffsets: new Set(),
+      xrefStreams: new Set(),
+      xrefStreamsParsed: new Set(),
+      pendingObject: null,
+      scanned: false,
+    });
+    const isWhitespace = byte =>
+      byte === 0x00 ||
+      byte === 0x09 ||
+      byte === 0x0a ||
+      byte === 0x0c ||
+      byte === 0x0d ||
+      byte === 0x20;
+    // Keep only a short suffix while an object dictionary spans windows.
+    const scanObject = (text, tail = "") => {
+      const object = tail + text;
+      const objectEnd = object.indexOf("endobj");
+      const streamOffset = object.search(/\bstream\b/);
+      let endOffset = streamOffset;
+      if (objectEnd >= 0 && (streamOffset < 0 || objectEnd < streamOffset)) {
+        endOffset = objectEnd;
+      }
+      const xrefOffset = object.search(/\/XRef\b/);
+      return {
+        hasXRef: xrefOffset >= 0 && (endOffset < 0 || xrefOffset < endOffset),
+        tail: endOffset < 0 ? object.slice(-OBJECT_MARKER_OVERLAP_BYTES) : null,
+      };
+    };
+
+    if (isNewRecovery) {
+      this.#entries.length = 0;
+      this.#cacheMap.clear();
+      this.#xrefStms.clear();
+      delete this._tableState;
+      delete this.streamState;
+      this.topDict = null;
+      this.startXRefQueue = [];
+    }
+
+    for (
+      let position = recoveryState.position;
+      position < length;
+      position += SCAN_WINDOW_BYTES
+    ) {
+      const windowBegin = Math.max(
+        stream.start,
+        position - HEADER_OVERLAP_BYTES
+      );
+      const windowEnd = Math.min(length, position + SCAN_WINDOW_BYTES);
+      const buffer = stream.getByteRange(windowBegin, windowEnd);
+      const bufferStr = bytesToString(buffer);
+
+      if (recoveryState.pendingObject) {
+        const pendingObject = recoveryState.pendingObject;
+        const result = scanObject(
+          bufferStr.slice(position - windowBegin),
+          pendingObject.tail
+        );
+        if (result.hasXRef) {
+          recoveryState.xrefStreams.add(pendingObject.offset);
+        }
+        recoveryState.pendingObject = result.tail
+          ? { offset: pendingObject.offset, tail: result.tail }
+          : null;
+      }
+
+      objectHeaderRegExp.lastIndex = 0;
+      let match;
+      while ((match = objectHeaderRegExp.exec(bufferStr)) !== null) {
+        const matchOffset = match.index;
+        if (matchOffset > 0 && !isWhitespace(buffer[matchOffset - 1])) {
+          continue;
+        }
+        const num = Number(match[1]);
+        const gen = Number(match[2]);
+        if (!Number.isSafeInteger(num) || !Number.isSafeInteger(gen)) {
+          continue;
+        }
+        const objectOffset = windowBegin + matchOffset - stream.start;
+        let updateEntry = !this.#entries[num];
+        if (!updateEntry && this.#entries[num].gen === gen) {
+          try {
+            const parser = new Parser({
+              lexer: new Lexer(
+                stream.makeSubStream(
+                  objectOffset + stream.start + match[0].length
+                )
+              ),
+            });
+            parser.getObj();
+            updateEntry = true;
+          } catch (ex) {
+            if (ex instanceof ParserEOFException) {
+              warn(`indexObjects -- checking object (${match[0]}): "${ex}".`);
+            } else {
+              updateEntry = true;
+            }
+          }
+        }
+        if (updateEntry) {
+          this.#entries[num] = {
+            offset: objectOffset,
+            gen,
+            uncompressed: true,
+          };
+        }
+
+        const result = scanObject(bufferStr.slice(matchOffset));
+        if (result.hasXRef) {
+          recoveryState.xrefStreams.add(objectOffset);
+        }
+        recoveryState.pendingObject = result.tail
+          ? { offset: objectOffset, tail: result.tail }
+          : null;
+      }
+
+      trailerRegExp.lastIndex = 0;
+      while ((match = trailerRegExp.exec(bufferStr)) !== null) {
+        const matchOffset = match.index;
+        if (matchOffset > 0 && !isWhitespace(buffer[matchOffset - 1])) {
+          continue;
+        }
+        const trailerOffset = windowBegin + matchOffset;
+        if (!recoveryState.trailerOffsets.has(trailerOffset)) {
+          recoveryState.trailerOffsets.add(trailerOffset);
+          recoveryState.trailers.push(trailerOffset);
+        }
+      }
+
+      if (position + SCAN_WINDOW_BYTES < length) {
+        stream.discardChunksBefore(windowEnd - HEADER_OVERLAP_BYTES);
+      }
+      recoveryState.position = position + SCAN_WINDOW_BYTES;
+    }
+    recoveryState.scanned = true;
+
+    for (const xrefStream of recoveryState.xrefStreams) {
+      if (recoveryState.xrefStreamsParsed.has(xrefStream)) {
+        continue;
+      }
+      this.#xrefStms.add(xrefStream);
+      if (!this.startXRefQueue.includes(xrefStream)) {
+        this.startXRefQueue.push(xrefStream);
+      }
+      this.readXRef(/* recoveryMode = */ true);
+      recoveryState.xrefStreamsParsed.add(xrefStream);
+    }
+
+    const trailerDicts = [];
+    let isEncrypted = false;
+    for (const trailer of recoveryState.trailers) {
+      stream.pos = trailer;
+      const parser = new Parser({
+        lexer: new Lexer(stream),
+        xref: this,
+        allowStreams: true,
+        recoveryMode: true,
+      });
+      const obj = parser.getObj();
+      if (!isCmd(obj, "trailer")) {
+        continue;
+      }
+      const dict = parser.getObj();
+      if (!(dict instanceof Dict)) {
+        continue;
+      }
+      trailerDicts.push(dict);
+      if (dict.has("Encrypt")) {
+        isEncrypted = true;
+      }
+    }
+
+    let trailerDict;
+    let trailerError;
+    for (const dict of [...trailerDicts, "genFallback", ...trailerDicts]) {
+      if (dict === "genFallback") {
+        if (!trailerError) {
+          break;
+        }
+        this._generationFallback = true;
+        continue;
+      }
+      let validPagesDict = false;
+      try {
+        const rootDict = dict.get("Root");
+        if (!(rootDict instanceof Dict)) {
+          continue;
+        }
+        const pagesDict = rootDict.get("Pages");
+        if (!(pagesDict instanceof Dict)) {
+          continue;
+        }
+        const pagesCount = pagesDict.get("Count");
+        if (Number.isInteger(pagesCount)) {
+          validPagesDict = true;
+        }
+      } catch (ex) {
+        trailerError = ex;
+        continue;
+      }
+      if (
+        validPagesDict &&
+        (!isEncrypted || dict.has("Encrypt")) &&
+        dict.has("ID")
+      ) {
+        delete this._boundedRecoveryState;
+        return dict;
+      }
+      trailerDict = dict;
+    }
+    if (trailerDict) {
+      delete this._boundedRecoveryState;
+      return trailerDict;
+    }
+    if (this.topDict) {
+      delete this._boundedRecoveryState;
+      return this.topDict;
+    }
+    if (!trailerDicts.length) {
+      for (const num in this.#entries) {
+        const entry = this.#entries[num];
+        if (!entry) {
+          continue;
+        }
+        const ref = Ref.get(parseInt(num, 10), entry.gen);
+        let obj;
+        try {
+          obj = this.fetch(ref);
+        } catch {
+          continue;
+        }
+        if (obj instanceof BaseStream) {
+          obj = obj.dict;
+        }
+        if (obj instanceof Dict && obj.has("Root")) {
+          delete this._boundedRecoveryState;
+          return obj;
+        }
+      }
+    }
+    delete this._boundedRecoveryState;
     throw new InvalidPDFException("Invalid PDF structure.");
   }
 

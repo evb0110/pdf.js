@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 /** @typedef {import("./page_viewport").PageViewport} PageViewport */
 /** @typedef {import("./api").TextContent} TextContent */
@@ -193,16 +194,19 @@ class TextLayer {
     }
 
     const pump = () => {
-      this.#reader.read().then(({ value, done }) => {
-        if (done) {
-          this.#capability.resolve();
-          return;
-        }
-        this.#lang ??= value.lang;
-        Object.assign(this.#styleCache, value.styles);
-        this.#processItems(value.items);
-        pump();
-      }, this.#capability.reject);
+      this.#reader
+        .read()
+        .then(({ value, done }) => {
+          if (done) {
+            this.#capability.resolve();
+            return;
+          }
+          this.#lang ??= value.lang;
+          Object.assign(this.#styleCache, value.styles);
+          this.#processItems(value.items);
+          pump();
+        }, this.#capability.reject)
+        .catch(this.#capability.reject);
     };
     this.#reader = this.#textContentSource.getReader();
     TextLayer.#pendingTextLayers.add(this);
@@ -310,7 +314,9 @@ class TextLayer {
           }
           parent.append(this.#container);
         } else if (item.type === "endMarkedContent") {
-          this.#container = this.#container.parentNode;
+          if (this.#container !== this.#rootContainer) {
+            this.#container = this.#container.parentNode ?? this.#rootContainer;
+          }
         }
         continue;
       }
@@ -328,12 +334,18 @@ class TextLayer {
       hasText: geom.str !== "",
       hasEOL: geom.hasEOL,
       fontSize: 0,
+      horizontalScale: 1,
     };
     this.#textDivs.push(textDiv);
 
     const tx = Util.transform(this.#transform, geom.transform);
-    let angle = Math.atan2(tx[1], tx[0]);
     const style = this.#styleCache[geom.fontName];
+    // A reflected text matrix reverses one axis, not both. Keep that
+    // reflection in scaleX so the font ascent follows the vertical axis.
+    const horizontalScale =
+      !style.vertical && tx[0] * tx[3] - tx[1] * tx[2] > 0 ? -1 : 1;
+    textDivProperties.horizontalScale = horizontalScale;
+    let angle = Math.atan2(horizontalScale * tx[1], horizontalScale * tx[0]);
     if (style.vertical) {
       angle += Math.PI / 2;
     }
@@ -425,6 +437,9 @@ class TextLayer {
     const { div, properties, ctx } = params;
     const { style } = div;
 
+    if (properties.horizontalScale < 0) {
+      style.setProperty("--scale-x", properties.horizontalScale);
+    }
     if (properties.canvasWidth !== 0 && properties.hasText) {
       const { fontFamily } = style;
       const { canvasWidth, fontSize } = properties;
@@ -434,7 +449,10 @@ class TextLayer {
       const { width } = ctx.measureText(div.textContent);
 
       if (width > 0) {
-        style.setProperty("--scale-x", (canvasWidth * this.#scale) / width);
+        style.setProperty(
+          "--scale-x",
+          (properties.horizontalScale * canvasWidth * this.#scale) / width
+        );
       }
     }
     if (properties.angle !== 0) {

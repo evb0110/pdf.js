@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 import { AnnotationEditorType, AnnotationPrefix } from "../../shared/util.js";
 import {
@@ -129,8 +130,11 @@ class StampEditor extends AnnotationEditor {
       this._uiManager.useNewAltTextFlow &&
       this.#bitmap
     ) {
-      this.addEditToolbar().then(() => {
-        this._editToolbar.hide();
+      this.addEditToolbar().then(toolbar => {
+        if (!toolbar) {
+          return;
+        }
+        toolbar.hide();
         this._uiManager.editAltText(this, /* firstTime = */ true);
       });
       return;

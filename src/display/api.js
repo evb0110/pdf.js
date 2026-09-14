@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 /**
  * @module pdfjsLib
@@ -633,9 +634,10 @@ class PDFDataRangeTransport {
   /**
    * @param {number} begin
    * @param {Uint8Array|null} chunk
+   * @param {boolean} [isLast] - Whether this is the final chunk.
    */
-  onDataRange(begin, chunk) {
-    this.#listener({ type: "range", begin, chunk });
+  onDataRange(begin, chunk, isLast = true) {
+    this.#listener({ type: "range", begin, chunk, isLast });
   }
 
   /**

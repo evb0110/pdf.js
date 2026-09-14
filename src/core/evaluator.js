@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 import {
   AbortException,
@@ -45,6 +46,7 @@ import {
   isNumberArray,
   lookupMatrix,
   lookupNormalRect,
+  MissingDataException,
 } from "./core_utils.js";
 import {
   getEncoding,
@@ -1309,6 +1311,9 @@ class PartialEvaluator {
       preEvaluatedFont = this.preEvaluateFont(font);
       preEvaluatedFont.cssFontInfo = cssFontInfo;
     } catch (reason) {
+      if (reason instanceof MissingDataException) {
+        throw reason;
+      }
       warn(`loadFont - preEvaluateFont failed: "${reason}".`);
       return errorFont();
     }
@@ -2891,9 +2896,11 @@ class PartialEvaluator {
           return true;
         }
 
-        // We're moving back so in case the last char was a whitespace
-        // we cancel it: it doesn't make sense to insert it.
-        resetLastChars();
+        // Visible text can use spaces for positioning. Invisible OCR text
+        // keeps its logical separator even when adjacent word boxes overlap.
+        if (textState.textRenderingMode !== TextRenderingMode.INVISIBLE) {
+          resetLastChars();
+        }
         flushTextContentItem();
         return true;
       }
@@ -2915,9 +2922,14 @@ class PartialEvaluator {
         return true;
       }
 
-      if (advanceX <= textOrientation * textContentItem.notASpace) {
-        // The real spacing between 2 consecutive chars is thin enough to be
-        // considered a non-space.
+      // Invisible OCR word boxes can touch even when the stream includes a
+      // logical space. Visible text still uses geometry to distinguish spaces
+      // from characters inserted only for kerning.
+      if (
+        advanceX <= textOrientation * textContentItem.notASpace &&
+        (textState.textRenderingMode !== TextRenderingMode.INVISIBLE ||
+          !shouldAddWhitepsace())
+      ) {
         resetLastChars();
       }
 
@@ -3258,6 +3270,9 @@ class PartialEvaluator {
             textState.fontSize = fontSizeArg;
             next(handleSetFont(fontNameArg, null));
             return;
+          case OPS.setTextRenderingMode:
+            textState.textRenderingMode = args[0];
+            break;
           case OPS.setTextRise:
             textState.textRise = args[0];
             break;
@@ -4390,11 +4405,7 @@ class PartialEvaluator {
         const stream = toUnicode.stream || toUnicode;
         const uint8array = stream.buffer
           ? new Uint8Array(stream.buffer.buffer, 0, stream.bufferLength)
-          : new Uint8Array(
-              stream.bytes.buffer,
-              stream.start,
-              stream.end - stream.start
-            );
+          : stream.getByteRange(stream.start, stream.end);
         hash.update(uint8array);
       } else if (toUnicode instanceof Name) {
         hash.update(toUnicode.name);
@@ -5137,6 +5148,8 @@ class TextState {
   textHScale = 1;
 
   textRise = 0;
+
+  textRenderingMode = TextRenderingMode.FILL;
 
   setTextMatrix(a, b, c, d, e, f) {
     const m = this.textMatrix;

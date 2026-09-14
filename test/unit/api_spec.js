@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 import {
   AnnotationEditorType,
@@ -2888,6 +2889,70 @@ describe("api", function () {
       expect(data.length).toEqual(basicApiFileLength);
     });
 
+    it("gets the full source length with a prefix before the PDF header", async function () {
+      const sourcePdf = await DefaultFileReaderFactory.fetch({
+        path: TEST_PDFS_PATH + basicApiFileName,
+      });
+      const prefix = new TextEncoder().encode("prefix before %PDF-\n");
+      const sourceLength = prefix.length + sourcePdf.length;
+      const prefixedPdf = new Uint8Array(sourceLength);
+      prefixedPdf.set(prefix);
+      prefixedPdf.set(sourcePdf, prefix.length);
+
+      const loadingTask = getDocument(prefixedPdf);
+      const pdfDoc = await loadingTask.promise;
+      const [downloadInfo, data] = await Promise.all([
+        pdfDoc.getDownloadInfo(),
+        pdfDoc.getData(),
+      ]);
+
+      expect(downloadInfo).toEqual({ length: sourceLength });
+      expect(data).toBeInstanceOf(Uint8Array);
+      expect(data.length).toEqual(sourceLength);
+
+      await loadingTask.destroy();
+    });
+
+    it("reports the full source length for a range PDF with a prefix before the PDF header", async function () {
+      const sourcePdf = await DefaultFileReaderFactory.fetch({
+        path: TEST_PDFS_PATH + basicApiFileName,
+      });
+      const prefix = new TextEncoder().encode("prefix before %PDF-\n");
+      const sourceLength = prefix.length + sourcePdf.length;
+      const prefixedPdf = new Uint8Array(sourceLength);
+      prefixedPdf.set(prefix);
+      prefixedPdf.set(sourcePdf, prefix.length);
+
+      const initialDataLength = 65536;
+      const initialData = new Uint8Array(
+        prefixedPdf.subarray(0, initialDataLength)
+      );
+      const transport = new PDFDataRangeTransport(
+        sourceLength,
+        initialData,
+        /* progressiveDone = */ undefined,
+        /* contentDispositionFilename = */ "prefix.pdf"
+      );
+      transport.requestDataRange = (begin, end) => {
+        waitSome(() => {
+          const chunk = new Uint8Array(prefixedPdf.subarray(begin, end));
+          transport.onDataRange(begin, chunk);
+        });
+      };
+
+      const loadingTask = getDocument({
+        range: transport,
+        rangeChunkSize: initialDataLength,
+      });
+      const pdfDoc = await loadingTask.promise;
+      const downloadInfo = await pdfDoc.getDownloadInfo();
+
+      expect(downloadInfo).toEqual({ length: sourceLength });
+      expect(downloadInfo.length).toEqual(prefixedPdf.length);
+
+      await loadingTask.destroy();
+    });
+
     it("gets data from PDF document with JPEG image containing EXIF-data (bug 1942064)", async function () {
       const typedArrayPdf = await DefaultFileReaderFactory.fetch({
         path: TEST_PDFS_PATH + "bug1942064.pdf",
@@ -2976,7 +3041,9 @@ describe("api", function () {
     });
 
     it("write a value in an annotation, save the pdf and check the value in xfa datasets (1)", async function () {
-      let loadingTask = getDocument(buildGetDocumentParams("issue16081.pdf"));
+      let loadingTask = getDocument(
+        buildGetDocumentParams("issue16081.pdf", { disableRange: true })
+      );
       let pdfDoc = await loadingTask.promise;
       const value = "Hello World";
 
@@ -3013,7 +3080,9 @@ describe("api", function () {
     it("write a value in an annotation, save the pdf and check the value in xfa datasets (2)", async function () {
       // In this file the path to the fields are wrong but the last path element
       // is unique so we can guess what the node is.
-      let loadingTask = getDocument(buildGetDocumentParams("f1040_2022.pdf"));
+      let loadingTask = getDocument(
+        buildGetDocumentParams("f1040_2022.pdf", { disableRange: true })
+      );
       let pdfDoc = await loadingTask.promise;
 
       pdfDoc.annotationStorage.setValue("1573R", { value: "hello" });
@@ -3042,7 +3111,9 @@ describe("api", function () {
     });
 
     it("write a new annotation, save the pdf and check that the prev entry in xref stream is correct", async function () {
-      let loadingTask = getDocument(buildGetDocumentParams("bug1823296.pdf"));
+      let loadingTask = getDocument(
+        buildGetDocumentParams("bug1823296.pdf", { disableRange: true })
+      );
       let pdfDoc = await loadingTask.promise;
       let page = await pdfDoc.getPage(1);
       const originalStructTree = await page.getStructTree();
@@ -4214,6 +4285,33 @@ describe("api", function () {
 Chapter 1 .......................................................... 2
 Paragraph 1.1 ...................................................... 3
 page 1 / 3`);
+    });
+
+    it("preserves explicit spaces between touching OCR words", async function () {
+      for (const gap of [-3, -0.1, 0, 0.1]) {
+        for (const separator of ["", " "]) {
+          const content =
+            `BT /F1 10 Tf 3 Tr 1 0 0 1 10 50 Tm (ji${separator}) Tj ` +
+            `1 0 0 1 ${22 + gap} 50 Tm (tomara) Tj ET`;
+          const data = assemblePdf([
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+            "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] " +
+              "/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n",
+            "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>\nendobj\n",
+            `5 0 obj\n<< /Length ${content.length} >>\nstream\n${content}\nendstream\nendobj\n`,
+          ]);
+          const loadingTask = getDocument({ data });
+          try {
+            const pdfDoc = await loadingTask.promise;
+            const pdfPage = await pdfDoc.getPage(1);
+            const { items } = await pdfPage.getTextContent();
+            expect(mergeText(items)).toEqual(`ji${separator}tomara`);
+          } finally {
+            await loadingTask.destroy();
+          }
+        }
+      }
     });
 
     it("gets text content, with correct properties (issue 8276)", async function () {

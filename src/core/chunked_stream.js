@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 import { arrayBuffersToBytes, MissingDataException } from "./core_utils.js";
 import { assert } from "../shared/util.js";
@@ -25,17 +26,100 @@ class ChunkedStream extends Stream {
 
   _loadedChunks = new Set();
 
+  _storedChunks = new Map();
+
   constructor(length, chunkSize, manager) {
     super(
-      /* arrayBuffer = */ new Uint8Array(length),
+      /* arrayBuffer = */ new Uint8Array(0),
       /* start = */ 0,
-      /* length = */ length,
+      /* length = */ 0,
       /* dict = */ null
     );
 
+    this.end = length;
     this.chunkSize = chunkSize;
     this.numChunks = Math.ceil(length / chunkSize);
     this.manager = manager;
+  }
+
+  _storeBytes(begin, bytes) {
+    let sourceOffset = 0;
+    while (sourceOffset < bytes.length) {
+      const position = begin + sourceOffset;
+      const chunk = Math.floor(position / this.chunkSize);
+      const chunkBegin = chunk * this.chunkSize;
+      const chunkLength = Math.min(this.chunkSize, this.end - chunkBegin);
+      const targetOffset = position - chunkBegin;
+      const copyLength = Math.min(
+        bytes.length - sourceOffset,
+        chunkLength - targetOffset
+      );
+      let target = this._storedChunks.get(chunk);
+      if (!target) {
+        if (
+          targetOffset === 0 &&
+          sourceOffset === 0 &&
+          copyLength === chunkLength &&
+          copyLength === bytes.byteLength &&
+          bytes.byteOffset === 0 &&
+          bytes.byteLength === bytes.buffer.byteLength
+        ) {
+          target = bytes;
+        } else {
+          target = new Uint8Array(chunkLength);
+          target.set(
+            bytes.subarray(sourceOffset, sourceOffset + copyLength),
+            targetOffset
+          );
+        }
+        this._storedChunks.set(chunk, target);
+      } else {
+        target.set(
+          bytes.subarray(sourceOffset, sourceOffset + copyLength),
+          targetOffset
+        );
+      }
+      sourceOffset += copyLength;
+    }
+  }
+
+  _getStoredByte(pos) {
+    const chunk = Math.floor(pos / this.chunkSize);
+    const bytes = this._storedChunks.get(chunk);
+    if (!bytes) {
+      throw new MissingDataException(pos, pos + 1);
+    }
+    return bytes[pos - chunk * this.chunkSize];
+  }
+
+  _getStoredRange(begin, end) {
+    if (begin >= end) {
+      return new Uint8Array(0);
+    }
+    const beginChunk = Math.floor(begin / this.chunkSize);
+    const endChunk = Math.floor((end - 1) / this.chunkSize);
+    if (beginChunk === endChunk) {
+      const bytes = this._storedChunks.get(beginChunk);
+      if (!bytes) {
+        throw new MissingDataException(begin, end);
+      }
+      const chunkBegin = beginChunk * this.chunkSize;
+      return bytes.subarray(begin - chunkBegin, end - chunkBegin);
+    }
+    const result = new Uint8Array(end - begin);
+    let resultOffset = 0;
+    for (let chunk = beginChunk; chunk <= endChunk; chunk++) {
+      const bytes = this._storedChunks.get(chunk);
+      if (!bytes) {
+        throw new MissingDataException(begin, end);
+      }
+      const chunkBegin = chunk * this.chunkSize;
+      const copyBegin = Math.max(begin, chunkBegin) - chunkBegin;
+      const copyEnd = Math.min(end, chunkBegin + bytes.length) - chunkBegin;
+      result.set(bytes.subarray(copyBegin, copyEnd), resultOffset);
+      resultOffset += copyEnd - copyBegin;
+    }
+    return result;
   }
 
   // If a particular stream does not implement one or more of these methods,
@@ -67,7 +151,10 @@ class ChunkedStream extends Stream {
     // Using `this.length` is inaccurate here since `this.start` can be moved
     // (see the `moveStart` method).
     const end = begin + chunk.byteLength;
-    if (end % chunkSize !== 0 && end !== this.bytes.length) {
+    if (end > this.end) {
+      throw new Error(`Bad end offset: ${end}`);
+    }
+    if (end % chunkSize !== 0 && end !== this.end) {
       throw new Error(`Bad end offset: ${end}`);
     }
 
@@ -77,7 +164,7 @@ class ChunkedStream extends Stream {
         "onReceiveData - expected an ArrayBuffer."
       );
     }
-    this.bytes.set(new Uint8Array(chunk), begin);
+    this._storeBytes(begin, new Uint8Array(chunk));
     const beginChunk = Math.floor(begin / chunkSize);
     const endChunk = Math.floor((end - 1) / chunkSize) + 1;
 
@@ -98,7 +185,12 @@ class ChunkedStream extends Stream {
         "onReceiveProgressiveData - expected an ArrayBuffer."
       );
     }
-    this.bytes.set(new Uint8Array(data), position);
+    if (position + data.byteLength > this.end) {
+      throw new Error(
+        `Bad progressive data end offset: ${position + data.byteLength}`
+      );
+    }
+    this._storeBytes(position, new Uint8Array(data));
     position += data.byteLength;
     this.progressiveDataLength = position;
     const endChunk =
@@ -122,11 +214,12 @@ class ChunkedStream extends Stream {
     if (chunk > this.numChunks) {
       return;
     }
-    if (chunk === this._lastSuccessfulEnsureByteChunk) {
+    const isLoaded = this._loadedChunks.has(chunk);
+    if (chunk === this._lastSuccessfulEnsureByteChunk && isLoaded) {
       return;
     }
 
-    if (!this._loadedChunks.has(chunk)) {
+    if (!isLoaded) {
       throw new MissingDataException(pos, pos + 1);
     }
     this._lastSuccessfulEnsureByteChunk = chunk;
@@ -178,18 +271,19 @@ class ChunkedStream extends Stream {
     if (pos >= this.progressiveDataLength) {
       this.ensureByte(pos);
     }
-    return this.bytes[this.pos++];
+    const byte = this._getStoredByte(pos);
+    this.pos++;
+    return byte;
   }
 
   getBytes(length) {
     const pos = this.pos;
     const endPos = !length ? this.end : Math.min(pos + length, this.end);
-
     if (endPos > this.progressiveDataLength) {
       this.ensureRange(pos, endPos);
     }
     this.pos = endPos;
-    return this.bytes.subarray(pos, endPos);
+    return this._getStoredRange(pos, endPos);
   }
 
   getByteRange(begin, end) {
@@ -202,7 +296,20 @@ class ChunkedStream extends Stream {
     if (end > this.progressiveDataLength) {
       this.ensureRange(begin, end);
     }
-    return this.bytes.subarray(begin, end);
+    return this._getStoredRange(begin, end);
+  }
+
+  discardChunksBefore(position) {
+    const firstChunk = Math.max(0, Math.floor(position / this.chunkSize));
+    const progressiveChunkCount = Math.ceil(
+      this.progressiveDataLength / this.chunkSize
+    );
+    for (const chunk of this._storedChunks.keys()) {
+      if (chunk < firstChunk && chunk >= progressiveChunkCount) {
+        this._storedChunks.delete(chunk);
+        this._loadedChunks.delete(chunk);
+      }
+    }
   }
 
   makeSubStream(start, length, dict = null) {
@@ -254,6 +361,17 @@ class ChunkedStream extends Stream {
     return subStream;
   }
 
+  clone() {
+    function ChunkedStreamClone() {}
+
+    ChunkedStreamClone.prototype = Object.create(this);
+    const clone = new ChunkedStreamClone();
+    clone.pos = clone.start = this.start;
+    clone.end = this.end;
+    clone.dict = this.dict?.clone?.() ?? this.dict;
+    return clone;
+  }
+
   getBaseStreams() {
     return [this];
   }
@@ -283,13 +401,30 @@ class ChunkedStreamManager {
 
   async sendRequest(begin, end) {
     const rangeReader = this.pdfStream.getRangeReader(begin, end);
+    let nextBegin = begin;
+    let receivedBytes = 0;
     let chunks = [];
+    let chunksLength = 0;
+
+    const flush = () => {
+      if (chunksLength === 0) {
+        return;
+      }
+      const data = arrayBuffersToBytes(chunks);
+      chunks = [];
+      chunksLength = 0;
+      this.onReceiveData({
+        chunk: data.buffer,
+        begin: nextBegin,
+      });
+      nextBegin += data.byteLength;
+      receivedBytes += data.byteLength;
+    };
 
     while (true) {
       const { value, done } = await rangeReader.read();
 
       if (this.#aborted) {
-        chunks = null;
         return; // Ignoring any data after abort.
       }
       if (done) {
@@ -301,17 +436,56 @@ class ChunkedStreamManager {
           "sendRequest - expected an ArrayBuffer."
         );
       }
-      chunks.push(value);
+      if (value.byteLength === 0) {
+        continue;
+      }
+      const nextEnd = nextBegin + chunksLength + value.byteLength;
+      if (nextEnd > this.length) {
+        throw new Error(
+          `Range reader returned data beyond the stream end: ${nextEnd} > ${this.length}`
+        );
+      }
+
+      let valueOffset = 0;
+      while (valueOffset < value.byteLength) {
+        const bytesToChunkBoundary =
+          this.chunkSize - ((nextBegin + chunksLength) % this.chunkSize);
+        const length = Math.min(
+          value.byteLength - valueOffset,
+          bytesToChunkBoundary
+        );
+        chunks.push(
+          valueOffset === 0 && length === value.byteLength
+            ? value
+            : value.slice(valueOffset, valueOffset + length)
+        );
+        chunksLength += length;
+        valueOffset += length;
+
+        if (
+          chunksLength === this.chunkSize ||
+          nextBegin + chunksLength === this.length
+        ) {
+          flush();
+        }
+      }
     }
 
-    if (chunks.length === 0 && this.disableAutoFetch) {
+    if (receivedBytes === 0 && this.disableAutoFetch) {
       // The range request wasn't dispatched, see the "GetRangeReader" handler
       // in the `src/display/api.js` file.
       return;
     }
-    const data = arrayBuffersToBytes(chunks);
-    chunks = null;
-    this.onReceiveData({ chunk: data.buffer, begin });
+    if (chunksLength > 0) {
+      throw new Error(
+        `Range reader ended with an incomplete chunk at ${nextBegin + chunksLength}`
+      );
+    }
+    if (nextBegin < end) {
+      throw new Error(
+        `Range reader ended before the requested end: ${nextBegin} < ${end}`
+      );
+    }
   }
 
   /**
@@ -418,6 +592,10 @@ class ChunkedStreamManager {
    */
   groupChunks(chunks) {
     const groupedChunks = [];
+    const maxChunksPerRequest = Math.max(
+      1,
+      Math.floor((8 * 1024 * 1024) / this.chunkSize)
+    );
     let beginChunk = -1;
     let prevChunk = -1;
 
@@ -427,7 +605,10 @@ class ChunkedStreamManager {
         beginChunk = chunk;
       }
 
-      if (prevChunk >= 0 && prevChunk + 1 !== chunk) {
+      if (
+        prevChunk >= 0 &&
+        (prevChunk + 1 !== chunk || chunk - beginChunk >= maxChunksPerRequest)
+      ) {
         groupedChunks.push({ beginChunk, endChunk: prevChunk + 1 });
         beginChunk = chunk;
       }

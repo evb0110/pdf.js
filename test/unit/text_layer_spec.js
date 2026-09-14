@@ -12,10 +12,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 import { buildGetDocumentParams } from "./test_utils.js";
 import { getDocument } from "../../src/display/api.js";
 import { isNodeJS } from "../../src/shared/util.js";
+import { PageViewport } from "../../src/display/page_viewport.js";
 import { TextLayer } from "../../src/display/text_layer.js";
 
 describe("textLayer", function () {
@@ -89,6 +91,128 @@ describe("textLayer", function () {
     ]);
 
     await loadingTask.destroy();
+  });
+
+  it("preserves the vertical axis of reflected text at each rotation", async function () {
+    if (isNodeJS) {
+      pending("document.createElement is not supported in Node.js.");
+    }
+    const viewport = new PageViewport({
+      viewBox: [0, 0, 200, 200],
+      userUnit: 1,
+      scale: 1,
+      rotation: 0,
+    });
+    for (const [transform, reflected, rotation] of [
+      [[20, 0, 0, 20, 100, 100], [-20, 0, 0, 20, 100, 100], 0],
+      [[0, -20, 20, 0, 100, 100], [0, 20, 20, 0, 100, 100], 90],
+      [[0, 20, -20, 0, 100, 100], [0, -20, -20, 0, 100, 100], 270],
+      [[-20, 0, 0, -20, 100, 100], [20, 0, 0, -20, 100, 100], 180],
+    ]) {
+      for (const str of ["ab", "X", " ", "\u200b\u200b"]) {
+        const spans = [];
+        for (const matrix of [transform, reflected]) {
+          const container = document.createElement("div");
+          const textLayer = new TextLayer({
+            textContentSource: {
+              items: [
+                {
+                  str,
+                  dir: "ltr",
+                  width: 40,
+                  height: 20,
+                  transform: matrix,
+                  fontName: "font",
+                  hasEOL: false,
+                },
+              ],
+              styles: {
+                font: {
+                  fontFamily: "sans-serif",
+                  ascent: 0.8,
+                  descent: -0.2,
+                  vertical: false,
+                },
+              },
+            },
+            container,
+            viewport,
+          });
+          await textLayer.render();
+          spans.push(container.firstChild);
+        }
+        const [ordinary, mirror] = spans;
+        expect(mirror.style.left).toEqual(ordinary.style.left);
+        expect(mirror.style.top).toEqual(ordinary.style.top);
+        expect(mirror.style.getPropertyValue("--font-height")).toEqual(
+          "20.00px"
+        );
+        expect(Number(mirror.style.getPropertyValue("--scale-x"))).toBeCloseTo(
+          -Number(ordinary.style.getPropertyValue("--scale-x") || 1),
+          8
+        );
+        for (const span of spans) {
+          const angle =
+            parseFloat(span.style.getPropertyValue("--rotate")) || 0;
+          expect((angle + 360) % 360).toEqual(rotation);
+          expect(span.textContent).toEqual(str);
+        }
+      }
+    }
+  });
+
+  it("preserves existing vertical-font placement for reflected matrices", async function () {
+    if (isNodeJS) {
+      pending("document.createElement is not supported in Node.js.");
+    }
+    const spans = [];
+    for (const horizontalScale of [20, -20]) {
+      const container = document.createElement("div");
+      const textLayer = new TextLayer({
+        textContentSource: {
+          items: [
+            {
+              str: "ab",
+              dir: "ttb",
+              width: 40,
+              height: 20,
+              transform: [horizontalScale, 0, 0, 20, 100, 100],
+              fontName: "font",
+              hasEOL: false,
+            },
+          ],
+          styles: {
+            font: {
+              fontFamily: "sans-serif",
+              ascent: 0.8,
+              descent: -0.2,
+              vertical: true,
+            },
+          },
+        },
+        container,
+        viewport: new PageViewport({
+          viewBox: [0, 0, 200, 200],
+          userUnit: 1,
+          scale: 1,
+          rotation: 0,
+        }),
+      });
+      await textLayer.render();
+      spans.push(container.firstChild);
+    }
+    expect(spans[0].style.getPropertyValue("--rotate")).toEqual("90deg");
+    expect(spans[1].style.getPropertyValue("--rotate")).toEqual("-90deg");
+    expect(
+      parseFloat(spans[0].style.left) + parseFloat(spans[1].style.left)
+    ).toBeCloseTo(100, 8);
+    for (const span of spans) {
+      expect(span.style.top).toEqual("50%");
+      expect(Number(span.style.getPropertyValue("--scale-x"))).toBeGreaterThan(
+        0
+      );
+      expect(span.textContent).toEqual("ab");
+    }
   });
 
   it("creates textLayers in parallel, from ReadableStream", async function () {

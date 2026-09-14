@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 // eslint-disable-next-line max-len
 /** @typedef {import("./annotation_editor_layer.js").AnnotationEditorLayer} AnnotationEditorLayer */
@@ -1083,8 +1084,15 @@ class AnnotationEditor {
     const { toolbarButtons } = this;
     if (toolbarButtons) {
       for (const [name, tool] of toolbarButtons) {
-        await this._editToolbar.addButton(name, tool);
+        const editToolbar = this._editToolbar;
+        if (!editToolbar) {
+          return null;
+        }
+        await editToolbar.addButton(name, tool);
       }
+    }
+    if (!this._editToolbar) {
+      return null;
     }
     if (!this.hasComment) {
       this._editToolbar.addButton("comment", this.addCommentButton());
