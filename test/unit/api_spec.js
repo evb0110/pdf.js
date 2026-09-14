@@ -4287,6 +4287,33 @@ Paragraph 1.1 ...................................................... 3
 page 1 / 3`);
     });
 
+    it("preserves explicit spaces between touching OCR words", async function () {
+      for (const gap of [-3, -0.1, 0, 0.1]) {
+        for (const separator of ["", " "]) {
+          const content =
+            `BT /F1 10 Tf 3 Tr 1 0 0 1 10 50 Tm (ji${separator}) Tj ` +
+            `1 0 0 1 ${22 + gap} 50 Tm (tomara) Tj ET`;
+          const data = assemblePdf([
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+            "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] " +
+              "/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n",
+            "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>\nendobj\n",
+            `5 0 obj\n<< /Length ${content.length} >>\nstream\n${content}\nendstream\nendobj\n`,
+          ]);
+          const loadingTask = getDocument({ data });
+          try {
+            const pdfDoc = await loadingTask.promise;
+            const pdfPage = await pdfDoc.getPage(1);
+            const { items } = await pdfPage.getTextContent();
+            expect(mergeText(items)).toEqual(`ji${separator}tomara`);
+          } finally {
+            await loadingTask.destroy();
+          }
+        }
+      }
+    });
+
     it("gets text content, with correct properties (issue 8276)", async function () {
       const loadingTask = getDocument(
         buildGetDocumentParams("issue8276_reduced.pdf")
