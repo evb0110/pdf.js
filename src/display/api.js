@@ -26,6 +26,7 @@ import {
   info,
   isNodeJS,
   makeObj,
+  OPS,
   RenderingIntentFlag,
   setVerbosityLevel,
   shadow,
@@ -1265,6 +1266,11 @@ class PDFDocumentProxy {
  *   boxes of all PDF operations that render onto the canvas.
  * @property {OperationsFilter} [operationsFilter] - If provided, only
  *   run for which this function returns `true`.
+ * @property {Set<string>} [hiddenAnnotationIds] - Ids of annotations, as
+ *   reported by `PDFPageProxy.getAnnotations`, whose appearances are left out
+ *   of the canvas. Every other annotation still renders according to
+ *   `annotationMode`. The set is read when `render` is called; later changes
+ *   to it do not affect the running task.
  */
 
 /**
@@ -1506,7 +1512,11 @@ class PDFPageProxy {
     recordImages = false,
     recordOperations = false,
     operationsFilter = null,
+    hiddenAnnotationIds = null,
   }) {
+    if (hiddenAnnotationIds !== null && !(hiddenAnnotationIds instanceof Set)) {
+      throw new TypeError("`hiddenAnnotationIds` must be a Set.");
+    }
     this._stats?.time("Overall");
 
     const intentArgs = this._transport.getRenderingIntent(
@@ -1650,6 +1660,7 @@ class PDFPageProxy {
       pageColors,
       enableHWA: this._transport.enableHWA,
       operationsFilter,
+      hiddenAnnotationIds,
     });
 
     (intentState.renderTasks ||= new Set()).add(internalRenderTask);
@@ -3336,6 +3347,44 @@ class RenderTask {
 }
 
 /**
+ * Leaves out the operations from the `beginAnnotation` of each hidden
+ * annotation to its matching `endAnnotation`. The operator list grows in
+ * place while chunks arrive, and `executeOperatorList` resumes where it
+ * stopped, so the scan continues from the last index it reached and may be
+ * asked for the same index again, but never for an earlier one.
+ */
+function createHiddenAnnotationsFilter(
+  operatorList,
+  hiddenAnnotationIds,
+  operationsFilter
+) {
+  const hiddenIds = new Set(hiddenAnnotationIds);
+  const annotationScopes = [];
+  let hiddenDepth = 0;
+  let scannedIndex = 0;
+  let isVisible = true;
+
+  return index => {
+    while (scannedIndex <= index) {
+      const scanIndex = scannedIndex++;
+      const fnId = operatorList.fnArray[scanIndex];
+      isVisible = hiddenDepth === 0;
+      if (fnId === OPS.beginAnnotation) {
+        const isHidden = hiddenIds.has(operatorList.argsArray[scanIndex][0]);
+        annotationScopes.push(isHidden);
+        if (isHidden) {
+          hiddenDepth++;
+          isVisible = false;
+        }
+      } else if (fnId === OPS.endAnnotation && annotationScopes.pop()) {
+        hiddenDepth--;
+      }
+    }
+    return isVisible && (!operationsFilter || operationsFilter(index));
+  };
+}
+
+/**
  * For internal use only.
  * @ignore
  */
@@ -3359,6 +3408,7 @@ class InternalRenderTask {
     pageColors = null,
     enableHWA = false,
     operationsFilter = null,
+    hiddenAnnotationIds = null,
   }) {
     this.callback = callback;
     this.params = params;
@@ -3391,7 +3441,14 @@ class InternalRenderTask {
     this._enableHWA = enableHWA;
     this._dependencyTracker = params.dependencyTracker;
     this._imagesTracker = params.imagesTracker;
-    this._operationsFilter = operationsFilter;
+    this._operationsFilter =
+      hiddenAnnotationIds?.size > 0
+        ? createHiddenAnnotationsFilter(
+            operatorList,
+            hiddenAnnotationIds,
+            operationsFilter
+          )
+        : operationsFilter;
   }
 
   get completed() {
@@ -3550,6 +3607,7 @@ const build =
 
 export {
   build,
+  createHiddenAnnotationsFilter,
   getDocument,
   PDFDataRangeTransport,
   PDFDocumentLoadingTask,

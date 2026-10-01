@@ -31,6 +31,7 @@ with existing PDF.js consumers. This fork does not publish the package.
 | 14 | `src/core/xref.js` | Recover malformed network XRefs through bounded scan windows. |
 | 15 | `src/core/worker.js` | Avoid loading a network stream during recovery and report its declared length. |
 | 16 | `src/core/worker.js` | Reject whole-document materialization for range sources and read ranges without `stream.bytes`. |
+| 17 | `src/display/api.js` | Add the `hiddenAnnotationIds` render parameter, which leaves the listed annotations' appearances out of the canvas inside PDF.js. |
 
 For the committed 16-edit port, normalizing version metadata and generated
 formatting makes the modern and legacy display and worker bundles match the

@@ -40,11 +40,7 @@ import {
   TestPdfsServer,
 } from "./test_utils.js";
 import {
-  fetchData as fetchDataDOM,
-  RenderingCancelledException,
-  StatTimer,
-} from "../../src/display/display_utils.js";
-import {
+  createHiddenAnnotationsFilter,
   getDocument,
   PDFDataRangeTransport,
   PDFDocumentLoadingTask,
@@ -53,6 +49,11 @@ import {
   PDFWorker,
   RenderTask,
 } from "../../src/display/api.js";
+import {
+  fetchData as fetchDataDOM,
+  RenderingCancelledException,
+  StatTimer,
+} from "../../src/display/display_utils.js";
 import { AutoPrintRegExp } from "../../web/ui_utils.js";
 import { GlobalImageCache } from "../../src/core/image_utils.js";
 import { GlobalWorkerOptions } from "../../src/display/worker_options.js";
@@ -5581,6 +5582,136 @@ have written that much by now. So, here’s to squashing bugs.`);
       ]);
 
       canvasFactory.destroy(canvasAndCtx);
+    });
+
+    it("leaves hidden annotations out of the canvas and keeps the others", async function () {
+      const loadingTask = getDocument(
+        buildGetDocumentParams("annotation-square-circle.pdf")
+      );
+      const pdfDoc = await loadingTask.promise;
+      const pdfPage = await pdfDoc.getPage(1);
+      const viewport = pdfPage.getViewport({ scale: 1 });
+      const { canvasFactory } = pdfDoc;
+      const toCanvas = ([x1, y1, x2, y2]) => [
+        ...viewport.convertToViewportPoint(x1, y1),
+        ...viewport.convertToViewportPoint(x2, y2),
+      ];
+      // The square (24R) and the circle (27R), in canvas coordinates.
+      const square = toCanvas([72, 658, 275, 754]);
+      const circle = toCanvas([71, 524, 163, 614]);
+
+      async function renderRegions(params) {
+        const canvasAndCtx = canvasFactory.create(
+          viewport.width,
+          viewport.height
+        );
+        await pdfPage.render({
+          canvas: canvasAndCtx.canvas,
+          viewport,
+          ...params,
+        }).promise;
+        const read = ([x1, y1, x2, y2]) =>
+          Array.from(
+            canvasAndCtx.context.getImageData(
+              Math.min(x1, x2),
+              Math.min(y1, y2),
+              Math.abs(x2 - x1),
+              Math.abs(y2 - y1)
+            ).data
+          );
+        const regions = { square: read(square), circle: read(circle) };
+        canvasFactory.destroy(canvasAndCtx);
+        return regions;
+      }
+
+      const enabled = await renderRegions({
+        annotationMode: AnnotationMode.ENABLE,
+      });
+      const disabled = await renderRegions({
+        annotationMode: AnnotationMode.DISABLE,
+      });
+      const hideSquare = new Set(["24R"]);
+      const hidden = await renderRegions({
+        annotationMode: AnnotationMode.ENABLE,
+        hiddenAnnotationIds: hideSquare,
+      });
+      // The set is read at submission, so emptying it now changes nothing.
+      hideSquare.clear();
+
+      expect(enabled.square).not.toEqual(disabled.square);
+      expect(enabled.circle).not.toEqual(disabled.circle);
+      expect(hidden.square).toEqual(disabled.square);
+      expect(hidden.circle).toEqual(enabled.circle);
+
+      expect(() =>
+        pdfPage.render({
+          canvas: canvasFactory.create(1, 1).canvas,
+          viewport,
+          hiddenAnnotationIds: ["24R"],
+        })
+      ).toThrowError(TypeError, "`hiddenAnnotationIds` must be a Set.");
+
+      await loadingTask.destroy();
+    });
+
+    it("hides annotation scopes across operator list chunks and nesting", function () {
+      const operatorList = { fnArray: [], argsArray: [] };
+      const push = (fnId, args = null) => {
+        operatorList.fnArray.push(fnId);
+        operatorList.argsArray.push(args);
+      };
+      const begin = id => push(OPS.beginAnnotation, [id, [0, 0, 1, 1]]);
+      const end = () => push(OPS.endAnnotation);
+      const filter = createHiddenAnnotationsFilter(
+        operatorList,
+        new Set(["1R"]),
+        null
+      );
+
+      push(OPS.save); // 0
+      begin("1R"); // 1
+      push(OPS.fill); // 2
+      expect([0, 1, 2].map(filter)).toEqual([true, false, false]);
+      // The same index can be asked again when execution resumes.
+      expect(filter(2)).toBeFalse();
+
+      // The next chunk arrives: a scope nested inside the hidden one, then a
+      // visible annotation that holds a hidden one.
+      begin("2R"); // 3
+      end(); // 4
+      end(); // 5, closes 1R
+      begin("3R"); // 6
+      push(OPS.fill); // 7
+      begin("1R"); // 8
+      push(OPS.fill); // 9
+      end(); // 10
+      push(OPS.stroke); // 11
+      end(); // 12
+      push(OPS.restore); // 13
+      expect([3, 4, 5].map(filter)).toEqual([false, false, false]);
+      // An index the executor skipped (6) is still scanned.
+      expect(filter(7)).toBeTrue();
+      expect([8, 9, 10, 11, 12, 13].map(filter)).toEqual([
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+      ]);
+    });
+
+    it("applies operationsFilter to the operations it does not hide", function () {
+      const operatorList = {
+        fnArray: [OPS.save, OPS.beginAnnotation, OPS.endAnnotation, OPS.fill],
+        argsArray: [null, ["1R", [0, 0, 1, 1]], null, null],
+      };
+      const filter = createHiddenAnnotationsFilter(
+        operatorList,
+        new Set(["1R"]),
+        index => index !== 3
+      );
+      expect([0, 1, 2, 3].map(filter)).toEqual([true, false, false, false]);
     });
 
     it("cleans up document resources after rendering of page", async function () {
