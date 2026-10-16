@@ -133,6 +133,119 @@ class WorkerMessageHandler {
     let terminated = false;
     let cancelXHRs = null;
     const WorkerTasks = new Set();
+    // Child PDFs own their xref/font caches, but export through this document's
+    // handler. Their leases follow main-thread operator-list consumers.
+    const nativeAppearanceScopes = new Map();
+
+    async function acquireNativeAppearance(projection, pageIndex) {
+      const scope = `native_ap_${pageIndex}_${projection.digest}`;
+      let state = nativeAppearanceScopes.get(scope);
+      if (!state) {
+        const scopedHandler = {
+          send(action, data, transfers) {
+            if (action === "commonobj" && data[1] === "Font") {
+              if (data[2]?.error) {
+                throw new Error(
+                  `Invalid native appearance font: ${data[2].error}`
+                );
+              }
+              if (state.fontIds.size === 0) {
+                state.fontIdle = Promise.withResolvers();
+              }
+              state.fontIds.add(data[0]);
+            }
+            handler.send(
+              action,
+              action === "commonobj" || action === "obj"
+                ? [...data, scope]
+                : data,
+              transfers
+            );
+          },
+          sendWithPromise: handler.sendWithPromise.bind(handler),
+        };
+        state = {
+          users: 0,
+          released: false,
+          managers: [],
+          ready: null,
+          idle: null,
+          fontIds: new Set(),
+          fontIdle: null,
+        };
+        nativeAppearanceScopes.set(scope, state);
+        const pdfs = [].concat(projection.pdf ?? []);
+        state.ready = Promise.all(
+          pdfs.map(async (pdf, documentIndex) => {
+            const childScope = `${scope}_d${documentIndex}`;
+            const manager = new LocalPdfManager({
+              source: pdf,
+              docId: `${docId}_${childScope}`,
+              handler,
+              password: null,
+              evaluatorOptions: {
+                ...pdfManager.evaluatorOptions,
+                ignoreErrors: false,
+              },
+            });
+            state.managers.push(manager);
+            manager.nativeAppearanceScope = `${childScope}_`;
+            manager.nativeAppearanceHandler = scopedHandler;
+            try {
+              await manager.initDocument(false);
+            } catch (reason) {
+              throw new Error(
+                `Invalid native appearance PDF: ${reason.message || reason.name || reason}`
+              );
+            }
+            if (manager.pdfDocument.numPages !== 1) {
+              throw new Error(
+                "Native appearance PDF must contain exactly one page."
+              );
+            }
+            return manager.getPage(0);
+          })
+        );
+      }
+      if (state.users === 0) {
+        state.idle = Promise.withResolvers();
+      }
+      state.users++;
+      state.released = false;
+      try {
+        return {
+          state,
+          projection: { ...projection, pages: await state.ready },
+        };
+      } catch (reason) {
+        if (--state.users === 0) {
+          state.idle.resolve();
+        }
+        throw reason;
+      }
+    }
+
+    async function releaseNativeAppearance(scope) {
+      const state = nativeAppearanceScopes.get(scope);
+      if (!state) {
+        return;
+      }
+      state.released = true;
+      await state.idle?.promise;
+      await state.fontIdle?.promise;
+      if (
+        state.released &&
+        state.users === 0 &&
+        nativeAppearanceScopes.get(scope) === state
+      ) {
+        nativeAppearanceScopes.delete(scope);
+        await state.ready.catch(() => {});
+        // These local caches have no external consumers after the lease ends.
+        // Drop the graph rather than clearing process-global source PDF caches.
+        state.managers = null;
+        state.ready = null;
+      }
+    }
     const verbosity = getVerbosityLevel();
 
     const { docId, apiVersion } = docParams;
@@ -917,27 +1030,49 @@ class WorkerMessageHandler {
     handler.on(
       "GetOperatorList",
       function (
-        { pageId, pageIndex, intent, cacheKey, annotationStorage, modifiedIds },
+        {
+          pageId,
+          pageIndex,
+          intent,
+          cacheKey,
+          annotationStorage,
+          modifiedIds,
+          nativeAnnotationAppearance,
+        },
         sink
       ) {
-        pdfManager.getPage(pageId).then(function (page) {
+        pdfManager.getPage(pageId).then(async function (page) {
           const task = new WorkerTask(`GetOperatorList: page ${pageIndex}`);
           startWorkerTask(task);
+          if (nativeAnnotationAppearance) {
+            sink.onCancel = () => task.terminate();
+          }
 
           // NOTE: Keep this condition in sync with the `info` helper function.
           const start = verbosity >= VerbosityLevel.INFOS ? Date.now() : 0;
 
           // Pre compile the pdf page and fetch the fonts/images.
-          page
-            .getOperatorList({
-              handler,
-              sink,
-              task,
-              intent,
-              cacheKey,
-              annotationStorage,
-              modifiedIds,
-              pageIndex,
+          let nativeLease;
+          Promise.resolve()
+            .then(async () => {
+              if (nativeAnnotationAppearance) {
+                nativeLease = await acquireNativeAppearance(
+                  nativeAnnotationAppearance,
+                  pageIndex
+                );
+              }
+              task.ensureNotTerminated();
+              return page.getOperatorList({
+                handler,
+                sink,
+                task,
+                intent,
+                cacheKey,
+                annotationStorage,
+                modifiedIds,
+                pageIndex,
+                nativeAnnotationAppearance: nativeLease?.projection,
+              });
             })
             .then(
               opListInfo => {
@@ -956,10 +1091,26 @@ class WorkerMessageHandler {
               }
             )
             .finally(() => {
+              if (nativeLease) {
+                if (--nativeLease.state.users === 0) {
+                  nativeLease.state.idle.resolve();
+                }
+              }
               finishWorkerTask(task);
             });
         });
       }
+    );
+
+    handler.on("NativeAnnotationAppearanceFontSettled", ({ scope, id }) => {
+      const state = nativeAppearanceScopes.get(scope);
+      if (state?.fontIds.delete(id) && state.fontIds.size === 0) {
+        state.fontIdle.resolve();
+      }
+    });
+
+    handler.on("ReleaseNativeAnnotationAppearance", ({ scope }) =>
+      releaseNativeAppearance(scope)
     );
 
     handler.on(
@@ -1009,8 +1160,19 @@ class WorkerMessageHandler {
       return pdfManager.ensure(page, "getStructTree");
     });
 
-    handler.on("FontFallback", function ({ id }) {
-      return pdfManager.fontFallback(id, handler);
+    handler.on("FontFallback", function ({ id, scope }) {
+      const manager = scope
+        ? nativeAppearanceScopes
+            .get(scope)
+            ?.managers.find(child => id.startsWith(`g_${child.docId}_`))
+        : pdfManager;
+      if (!manager) {
+        throw new Error("Native appearance font scope was released.");
+      }
+      return manager.fontFallback(
+        id,
+        manager.nativeAppearanceHandler || handler
+      );
     });
 
     if (
@@ -1041,6 +1203,10 @@ class WorkerMessageHandler {
       terminated = true;
 
       const waitOn = [];
+      for (const [scope, state] of nativeAppearanceScopes) {
+        state.fontIdle?.resolve();
+        waitOn.push(releaseNativeAppearance(scope));
+      }
       if (pdfManager) {
         pdfManager.terminate(new AbortException("Worker was terminated."));
 

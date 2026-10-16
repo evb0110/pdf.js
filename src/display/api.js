@@ -1266,6 +1266,8 @@ class PDFDocumentProxy {
  *   boxes of all PDF operations that render onto the canvas.
  * @property {OperationsFilter} [operationsFilter] - If provided, only
  *   run for which this function returns `true`.
+ * @property {NativeAnnotationAppearance|null} [nativeAnnotationAppearance] -
+ *   Immutable writer appearances composed at the loaded annotation slots.
  * @property {Set<string>} [hiddenAnnotationIds] - Ids of annotations, as
  *   reported by `PDFPageProxy.getAnnotations`, whose appearances are left out
  *   of the canvas. Every other annotation still renders according to
@@ -1340,6 +1342,95 @@ class PDFDocumentProxy {
  * @property {Array<any>} argsArray - Array containing the arguments of the
  *   functions.
  */
+
+/**
+ * Immutable, read-only writer appearance projection. The digest identifies the
+ * exact source/page, ordered plan and PDF bytes. Bytes are copied by render().
+ * The one-page PDF contains writer-produced FreeText annotations; indices are
+ * zero-based. Unmentioned loaded annotations retain their source appearance.
+ * Source IDs must belong to the loaded page. Append IDs must not.
+ * Appends retain plan order; replacements retain the source annotation slot.
+ *
+ * @typedef {Readonly<{
+ *   digest: string, pdf: Uint8Array|ReadonlyArray<Uint8Array>|null,
+ *   annotations: ReadonlyArray<NativeAnnotationAppearanceEntry>
+ * }>} NativeAnnotationAppearance
+ * @typedef {Readonly<{
+ *   action: "retain"|"delete", id: string
+ * }> | Readonly<{
+ *   action: "replace"|"append", id: string, appearanceIndex: number,
+ *   appearanceDocument?: number
+ * }>} NativeAnnotationAppearanceEntry
+ */
+
+function captureNativeAnnotationAppearance(projection) {
+  if (projection === null) {
+    return null;
+  }
+  const pdfs = [].concat(projection?.pdf ?? []);
+  if (
+    !projection ||
+    !/^[a-f0-9]{64}$/.test(projection.digest) ||
+    !Array.isArray(projection.annotations) ||
+    (projection.pdf !== null &&
+      !(projection.pdf instanceof Uint8Array) &&
+      !Array.isArray(projection.pdf)) ||
+    pdfs.some(
+      pdf =>
+        !(pdf instanceof Uint8Array) ||
+        !pdf.length ||
+        pdf.byteLength > 512 * 1024 * 1024
+    )
+  ) {
+    throw new TypeError("Invalid nativeAnnotationAppearance projection.");
+  }
+  const ids = new Set();
+  const indices = pdfs.map(() => new Set());
+  const annotations = projection.annotations.map(entry => {
+    if (
+      !entry ||
+      typeof entry.id !== "string" ||
+      !entry.id ||
+      ids.has(entry.id) ||
+      !["retain", "replace", "delete", "append"].includes(entry.action)
+    ) {
+      throw new TypeError("Invalid or duplicate native annotation action/ID.");
+    }
+    ids.add(entry.id);
+    const captured = { action: entry.action, id: entry.id };
+    if (entry.action === "replace" || entry.action === "append") {
+      const documentIndex = entry.appearanceDocument ?? 0;
+      if (
+        !Number.isInteger(documentIndex) ||
+        documentIndex < 0 ||
+        documentIndex >= pdfs.length ||
+        !Number.isInteger(entry.appearanceIndex) ||
+        entry.appearanceIndex < 0 ||
+        indices[documentIndex].has(entry.appearanceIndex) ||
+        indices[documentIndex].size >= 256
+      ) {
+        throw new TypeError("Invalid or duplicate native appearance index.");
+      }
+      indices[documentIndex].add(entry.appearanceIndex);
+      if (entry.appearanceDocument !== undefined) {
+        captured.appearanceDocument = documentIndex;
+      }
+      captured.appearanceIndex = entry.appearanceIndex;
+    }
+    return Object.freeze(captured);
+  });
+  let capturedPdf = null;
+  if (Array.isArray(projection.pdf)) {
+    capturedPdf = Object.freeze(pdfs.map(pdf => pdf.slice()));
+  } else if (projection.pdf) {
+    capturedPdf = pdfs[0].slice();
+  }
+  return Object.freeze({
+    digest: projection.digest,
+    pdf: capturedPdf,
+    annotations: Object.freeze(annotations),
+  });
+}
 
 /**
  * Proxy to a `PDFPage` in the worker thread.
@@ -1513,7 +1604,16 @@ class PDFPageProxy {
     recordOperations = false,
     operationsFilter = null,
     hiddenAnnotationIds = null,
+    nativeAnnotationAppearance = null,
   }) {
+    nativeAnnotationAppearance = captureNativeAnnotationAppearance(
+      nativeAnnotationAppearance
+    );
+    if (nativeAnnotationAppearance && isEditing) {
+      throw new TypeError(
+        "Native appearances cannot use annotation editing state."
+      );
+    }
     if (hiddenAnnotationIds !== null && !(hiddenAnnotationIds instanceof Set)) {
       throw new TypeError("`hiddenAnnotationIds` must be a Set.");
     }
@@ -1525,7 +1625,27 @@ class PDFPageProxy {
       printAnnotationStorage,
       isEditing
     );
+    if (nativeAnnotationAppearance) {
+      intentArgs.nativeAnnotationAppearance = nativeAnnotationAppearance;
+      intentArgs.cacheKey += `_native_ap_${nativeAnnotationAppearance.digest}`;
+      // A replacement is already the canonical paint for this source slot.
+      // The legacy final-canvas hide filter must not suppress it a second time.
+      if (hiddenAnnotationIds?.size) {
+        hiddenAnnotationIds = new Set(hiddenAnnotationIds);
+        for (const entry of nativeAnnotationAppearance.annotations) {
+          if (entry.action === "replace" || entry.action === "append") {
+            hiddenAnnotationIds.delete(entry.id);
+          }
+        }
+      }
+    }
     const { renderingIntent, cacheKey } = intentArgs;
+    for (const [key, state] of this._intentStates) {
+      if (state.nativeAppearanceScope) {
+        state.retired = key !== cacheKey;
+      }
+    }
+    this.#retireNativeAppearances();
     // If there was a pending destroy, cancel it so no cleanup happens during
     // this call to render.
     this.#pendingCleanup = false;
@@ -1572,6 +1692,7 @@ class PDFPageProxy {
 
     const complete = error => {
       intentState.renderTasks.delete(internalRenderTask);
+      this.#retireNativeAppearances();
 
       if (shouldRecordOperations) {
         const recordedBBoxes = internalRenderTask.gfx?.dependencyTracker.take();
@@ -1826,6 +1947,9 @@ class PDFPageProxy {
 
     const waitOn = [];
     for (const intentState of this._intentStates.values()) {
+      if (intentState.nativeAppearanceScope) {
+        intentState.retired = true;
+      }
       this._abortOperatorList({
         intentState,
         reason: new Error("Page was destroyed."),
@@ -1844,7 +1968,29 @@ class PDFPageProxy {
     this.objs.clear();
     this.#pendingCleanup = false;
 
-    return Promise.all(waitOn);
+    return Promise.all(waitOn).finally(() => {
+      for (const state of this._intentStates.values()) {
+        if (state.nativeAppearanceScope) {
+          this._transport.releaseNativeAppearance(state.nativeAppearanceScope);
+        }
+      }
+      this._intentStates.clear();
+    });
+  }
+
+  #retireNativeAppearances() {
+    for (const [key, state] of this._intentStates) {
+      if (
+        !state.retired ||
+        state.renderTasks?.size ||
+        state.streamReader ||
+        !state.operatorList?.lastChunk
+      ) {
+        continue;
+      }
+      this._intentStates.delete(key);
+      this._transport.releaseNativeAppearance(state.nativeAppearanceScope);
+    }
   }
 
   /**
@@ -1875,6 +2021,11 @@ class PDFPageProxy {
     for (const { renderTasks, operatorList } of this._intentStates.values()) {
       if (renderTasks.size > 0 || !operatorList.lastChunk) {
         return false;
+      }
+    }
+    for (const state of this._intentStates.values()) {
+      if (state.nativeAppearanceScope) {
+        this._transport.releaseNativeAppearance(state.nativeAppearanceScope);
       }
     }
     this._intentStates.clear();
@@ -1928,6 +2079,7 @@ class PDFPageProxy {
     cacheKey,
     annotationStorageSerializable,
     modifiedIds,
+    nativeAnnotationAppearance = null,
   }) {
     if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
       assert(
@@ -1936,6 +2088,11 @@ class PDFPageProxy {
       );
     }
     const { map, transfer } = annotationStorageSerializable;
+    const intentState = this._intentStates.get(cacheKey);
+    if (nativeAnnotationAppearance) {
+      intentState.nativeAppearanceScope = `native_ap_${this._pageIndex}_${nativeAnnotationAppearance.digest}`;
+      this._transport.retainNativeAppearance(intentState.nativeAppearanceScope);
+    }
 
     const readableStream = this._transport.messageHandler.sendWithStream(
       "GetOperatorList",
@@ -1946,13 +2103,13 @@ class PDFPageProxy {
         cacheKey,
         annotationStorage: map,
         modifiedIds,
+        nativeAnnotationAppearance,
       },
       /* queueingStrategy = */ undefined,
       transfer
     );
     const reader = readableStream.getReader();
 
-    const intentState = this._intentStates.get(cacheKey);
     intentState.streamReader = reader;
 
     const pump = () => {
@@ -1960,6 +2117,7 @@ class PDFPageProxy {
         ({ value, done }) => {
           if (done) {
             intentState.streamReader = null;
+            this.#retireNativeAppearances();
             return;
           }
           if (this._transport.destroyed) {
@@ -1974,7 +2132,14 @@ class PDFPageProxy {
           if (this._transport.destroyed) {
             return; // Ignore any pending requests if the worker was terminated.
           }
-          if (intentState.operatorList) {
+          if (intentState.nativeAppearanceScope) {
+            intentState.retired = true;
+            intentState.operatorList.lastChunk = true;
+            for (const renderTask of intentState.renderTasks) {
+              renderTask.cancel(reason);
+            }
+            this.#retireNativeAppearances();
+          } else if (intentState.operatorList) {
             // Mark operator list as complete.
             intentState.operatorList.lastChunk = true;
 
@@ -2055,6 +2220,11 @@ class PDFPageProxy {
     for (const [curCacheKey, curIntentState] of this._intentStates) {
       if (curIntentState === intentState) {
         this._intentStates.delete(curCacheKey);
+        if (intentState.nativeAppearanceScope) {
+          this._transport.releaseNativeAppearance(
+            intentState.nativeAppearanceScope
+          );
+        }
         break;
       }
     }
@@ -2443,6 +2613,67 @@ class WorkerTransport {
 
   #passwordCapability = null;
 
+  #nativeAppearanceScopes = new Map();
+
+  retainNativeAppearance(scope) {
+    let state = this.#nativeAppearanceScopes.get(scope);
+    if (!state) {
+      state = {
+        references: 0,
+        commonIds: new Set(),
+        pageIds: new Map(),
+        pending: new Set(),
+        fontLoader: new FontLoader({
+          ownerDocument: this._params.ownerDocument,
+        }),
+      };
+      this.#nativeAppearanceScopes.set(scope, state);
+    }
+    state.references++;
+  }
+
+  async releaseNativeAppearance(scope) {
+    const state = this.#nativeAppearanceScopes.get(scope);
+    if (!state || --state.references !== 0) {
+      return;
+    }
+    try {
+      await Promise.allSettled(state.pending);
+      if (state.references || this.destroyed) {
+        return;
+      }
+      await this.messageHandler.sendWithPromise(
+        "ReleaseNativeAnnotationAppearance",
+        { scope }
+      );
+      await Promise.allSettled(state.pending);
+      if (state.references) {
+        return;
+      }
+      for (const id of state.commonIds) {
+        if (this.commonObjs.has(id)) {
+          this.commonObjs.get(id)?.bitmap?.close();
+          this.commonObjs.delete(id);
+        }
+      }
+      for (const [pageIndex, ids] of state.pageIds) {
+        const objects = this.#pageCache.get(pageIndex)?.objs;
+        for (const id of ids) {
+          if (objects?.has(id)) {
+            objects.get(id)?.bitmap?.close();
+            objects.delete(id);
+          }
+        }
+      }
+      state.fontLoader.clear();
+      this.#nativeAppearanceScopes.delete(scope);
+    } catch (reason) {
+      if (!this.destroyed) {
+        warn(`Native appearance resource cleanup failed: ${reason}`);
+      }
+    }
+  }
+
   constructor(
     messageHandler,
     loadingTask,
@@ -2638,6 +2869,10 @@ class WorkerTransport {
     Promise.all(waitOn).then(() => {
       this.commonObjs.clear();
       this.fontLoader.clear();
+      for (const state of this.#nativeAppearanceScopes.values()) {
+        state.fontLoader.clear();
+      }
+      this.#nativeAppearanceScopes.clear();
       this.#methodPromises.clear();
       this.filterFactory.destroy();
       TextLayer.cleanup();
@@ -2819,12 +3054,30 @@ class WorkerTransport {
       page._startRenderPage(data.transparency, data.cacheKey);
     });
 
-    messageHandler.on("commonobj", ([id, type, exportedData]) => {
+    messageHandler.on("commonobj", ([id, type, exportedData, scope]) => {
       if (this.destroyed) {
         return null; // Ignore any pending requests if the worker was terminated.
       }
 
+      const nativeScope = scope
+        ? this.#nativeAppearanceScopes.get(scope)
+        : null;
+      const fontSettled = () => {
+        if (scope && type === "Font") {
+          messageHandler.send("NativeAnnotationAppearanceFontSettled", {
+            scope,
+            id,
+          });
+        }
+      };
+      if (scope && !nativeScope) {
+        fontSettled();
+        exportedData?.bitmap?.close();
+        return null;
+      }
+      nativeScope?.commonIds.add(id);
       if (this.commonObjs.has(id)) {
+        fontSettled();
         return null;
       }
 
@@ -2834,6 +3087,7 @@ class WorkerTransport {
             const exportedError = exportedData.error;
             warn(`Error during font loading: ${exportedError}`);
             this.commonObjs.resolve(id, exportedError);
+            fontSettled();
             break;
           }
 
@@ -2849,9 +3103,11 @@ class WorkerTransport {
             exportedData.extra
           );
 
-          this.fontLoader
+          const fontPromise = (nativeScope?.fontLoader ?? this.fontLoader)
             .bind(font)
-            .catch(() => messageHandler.sendWithPromise("FontFallback", { id }))
+            .catch(() =>
+              messageHandler.sendWithPromise("FontFallback", { id, scope })
+            )
             .finally(() => {
               if (!font.fontExtraProperties) {
                 // Immediately release the `font.data` property once the font
@@ -2861,8 +3117,15 @@ class WorkerTransport {
                 // multiple megabytes, this will help reduce memory usage.
                 font.clearData();
               }
-              this.commonObjs.resolve(id, font);
+              if (this.destroyed && nativeScope) {
+                nativeScope.fontLoader.clear();
+              } else {
+                this.commonObjs.resolve(id, font);
+              }
+              nativeScope?.pending.delete(fontPromise);
+              fontSettled();
             });
+          nativeScope?.pending.add(fontPromise);
           break;
         case "CopyLocalImage":
           const { imageRef } = exportedData;
@@ -2902,12 +3165,24 @@ class WorkerTransport {
       return null;
     });
 
-    messageHandler.on("obj", ([id, pageIndex, type, imageData]) => {
+    messageHandler.on("obj", ([id, pageIndex, type, imageData, scope]) => {
       if (this.destroyed) {
         // Ignore any pending requests if the worker was terminated.
         return;
       }
 
+      const nativeScope = scope
+        ? this.#nativeAppearanceScopes.get(scope)
+        : null;
+      if (scope && !nativeScope) {
+        imageData?.bitmap?.close();
+        return;
+      }
+      if (nativeScope) {
+        nativeScope.pageIds
+          .getOrInsertComputed(pageIndex, () => new Set())
+          .add(id);
+      }
       const pageProxy = this.#pageCache.get(pageIndex);
       if (pageProxy.objs.has(id)) {
         return;
@@ -3247,6 +3522,10 @@ class WorkerTransport {
       }
     }
     this.commonObjs.clear();
+    for (const state of this.#nativeAppearanceScopes.values()) {
+      state.fontLoader.clear();
+    }
+    this.#nativeAppearanceScopes.clear();
     if (!keepLoadedFonts) {
       this.fontLoader.clear();
     }

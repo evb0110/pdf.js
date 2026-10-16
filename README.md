@@ -32,6 +32,7 @@ with existing PDF.js consumers. This fork does not publish the package.
 | 15 | `src/core/worker.js` | Avoid loading a network stream during recovery and report its declared length. |
 | 16 | `src/core/worker.js` | Reject whole-document materialization for range sources and read ranges without `stream.bytes`. |
 | 17 | `src/display/api.js` | Add the `hiddenAnnotationIds` render parameter, which leaves the listed annotations' appearances out of the canvas inside PDF.js. |
+| 18 | `src/display/api.js`, `src/core/worker.js`, `src/core/document.js`, `src/core/annotation.js`, `src/display/canvas.js`, `src/pdf.js` | Compose immutable native FreeText appearances at source annotation slots, with isolated resource scopes, bounded consumer lifetime and preserved source wrappers. |
 
 For the committed 16-edit port, normalizing version metadata and generated
 formatting makes the modern and legacy display and worker bundles match the
@@ -49,6 +50,37 @@ the one-entry `ensureByte` cache after shared chunks are discarded.
 DataLoaded reports the full source extent for PDFs with bytes before `%PDF-`.
 Range readers keep pending reads open across intermediate transport chunks and
 close only after the final chunk.
+
+### Read-only native annotation appearances
+
+`PDFPageProxy.render` accepts `nativeAnnotationAppearance`, also exported as the
+`NativeAnnotationAppearance` type. Its `digest` is the lowercase SHA-256 of the
+exact source/page identity, ordered plan and native PDF bytes captured by the
+caller. The `pdf: Uint8Array | readonly Uint8Array[] | null` field contains one-page
+native FreeText appearance PDFs.
+`annotations` is an immutable ordered array of these entries:
+
+- `{ action: "retain" | "delete", id }` selects an actual loaded annotation ID.
+- `{ action: "replace", id, appearanceIndex }` replaces its AP and canonical Rect.
+- `{ action: "append", id, appearanceIndex }` appends a caller-stable unique ID.
+
+Indices are zero-based in a mini-PDF's annotation array. Replacement/append
+entries accept `appearanceDocument` (zero-based, default 0) to select a batch.
+Each mini-PDF admits up to 256 appearances; a page may consume multiple batches.
+Unmentioned sources
+retain their original appearance. Source order and append plan order are kept.
+Render copies bytes and entries at submission. Duplicate or absent source IDs,
+invalid indices, non-FreeText replacements, malformed PDFs and missing APs fail
+explicitly. This API cannot be combined with annotation editor/storage state.
+It never changes the loaded document, annotation data or saved bytes.
+
+The loaded annotation owns visibility, optional content and wrapper flags;
+the native PDF owns AP resources and canonical geometry. The child PDF has its
+own xref, ref caches and evaluator. Operators use the original document handler
+and main canvas. Digest-specific render intent and resource identities prevent
+stale glyph reuse. Superseded intent states, AP resource objects and font faces
+are released after their render and font consumers settle, including canceled
+renders. Ordinary document fonts and other views keep their existing owners.
 
 ## Contributing
 

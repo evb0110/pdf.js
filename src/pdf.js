@@ -12,11 +12,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 // eslint-disable-next-line max-len
 /** @typedef {import("./display/api").OnProgressParameters} OnProgressParameters */
 // eslint-disable-next-line max-len
 /** @typedef {import("./display/api").PDFDocumentLoadingTask} PDFDocumentLoadingTask */
+// eslint-disable-next-line max-len
+/** @typedef {import("./display/api").NativeAnnotationAppearance} NativeAnnotationAppearance */
 /** @typedef {import("./display/api").PDFDocumentProxy} PDFDocumentProxy */
 /** @typedef {import("./display/api").PDFPageProxy} PDFPageProxy */
 /** @typedef {import("./display/api").RenderTask} RenderTask */

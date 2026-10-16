@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 import {
   AnnotationActionEventType,
@@ -1260,9 +1261,37 @@ class Annotation {
     return false;
   }
 
-  async getOperatorList(evaluator, task, intent, annotationStorage) {
-    const { hasOwnCanvas, id, rect } = this.data;
-    let appearance = this.appearance;
+  // Read-only writer appearances retain this loaded annotation's wrapper.
+  // In particular, OC references must never be resolved in the child xref.
+  getNativeAppearanceOperatorList(evaluator, task, intent, annotation, id) {
+    return Annotation.prototype.getOperatorList.call(
+      this,
+      evaluator,
+      task,
+      intent,
+      null,
+      { annotation, id }
+    );
+  }
+
+  async getOperatorList(
+    evaluator,
+    task,
+    intent,
+    annotationStorage,
+    native = null
+  ) {
+    const { hasOwnCanvas, id, rect } = native
+      ? {
+          hasOwnCanvas: false,
+          id: native.id,
+          rect: native.annotation.data.rect,
+        }
+      : this.data;
+    // Concurrent intents can share AP bytes, but each needs its own cursor.
+    let appearance = native
+      ? native.annotation.appearance.clone()
+      : this.appearance;
     const isUsingOwnCanvas = !!(
       hasOwnCanvas &&
       intent & RenderingIntentFlag.DISPLAY &&
@@ -1305,27 +1334,27 @@ class Annotation {
       opList.addOp(OPS.beginMarkedContentProps, ["OC", optionalContent]);
     }
 
-    opList.addOp(OPS.beginAnnotation, [
-      id,
-      rect,
-      transform,
-      matrix,
-      isUsingOwnCanvas,
-    ]);
+    const annotationArgs = [id, rect, transform, matrix, isUsingOwnCanvas];
+    if (this.flags & (AnnotationFlag.NOROTATE | AnnotationFlag.NOZOOM)) {
+      annotationArgs.push(undefined, this.flags);
+    }
+    opList.addOp(OPS.beginAnnotation, annotationArgs);
 
     await evaluator.getOperatorList({
       stream: appearance,
       task,
       resources,
       operatorList: opList,
-      fallbackFontDict: this._fallbackFontDict,
+      fallbackFontDict: native ? null : this._fallbackFontDict,
     });
     opList.addOp(OPS.endAnnotation, []);
 
     if (optionalContent !== undefined) {
       opList.addOp(OPS.endMarkedContent, []);
     }
-    this.reset();
+    if (!native) {
+      this.reset();
+    }
     return { opList, separateForm: false, separateCanvas: isUsingOwnCanvas };
   }
 

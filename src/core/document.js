@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 import {
   AnnotationEditorPrefix,
@@ -122,7 +123,7 @@ class Page {
     };
     this._localIdFactory = class extends globalIdFactory {
       static createObjId() {
-        return `p${pageIndex}_${++idCounters.obj}`;
+        return `${pdfManager.nativeAppearanceScope || ""}p${pageIndex}_${++idCounters.obj}`;
       }
 
       static getPageObjId() {
@@ -474,6 +475,7 @@ class Page {
     pageIndex = this.pageIndex,
     annotationStorage = null,
     modifiedIds = null,
+    nativeAnnotationAppearance = null,
   }) {
     const contentStreamPromise = this.getContentStream();
     const resourcesPromise = this.loadResources(RESOURCES_KEYS_OPERATOR_LIST);
@@ -605,8 +607,72 @@ class Page {
       }
       annotations = annotations.concat(newAnnotations);
     }
+    const nativeEntries = new Map();
+    const nativeAppends = [];
+    let nativeEvaluators = null;
+    let nativeAnnotations = null;
+    if (nativeAnnotationAppearance) {
+      const { annotations: plan, pages: nativePages } =
+        nativeAnnotationAppearance;
+      if (annotationStorage?.size || modifiedIds?.size) {
+        throw new FormatError(
+          "Native appearances cannot use annotation editing state."
+        );
+      }
+      const loadedIds = new Set(
+        annotations.map(annotation => annotation.data.id)
+      );
+      for (const entry of plan) {
+        if (entry.action === "append") {
+          if (loadedIds.has(entry.id)) {
+            throw new FormatError(
+              "Native append ID already exists in the loaded page."
+            );
+          }
+          nativeAppends.push(entry);
+        } else if (!loadedIds.has(entry.id)) {
+          throw new FormatError(
+            "Native source annotation is absent from the loaded page."
+          );
+        } else {
+          nativeEntries.set(entry.id, entry);
+        }
+      }
+      nativeAnnotations = await Promise.all(
+        nativePages.map(page => page._parsedAnnotations)
+      );
+      nativeEvaluators = nativePages.map(page =>
+        page._createPartialEvaluator(
+          page.pdfManager.nativeAppearanceHandler,
+          pageIndex
+        )
+      );
+      for (const entry of plan) {
+        if (entry.action !== "replace" && entry.action !== "append") {
+          continue;
+        }
+        const annotation =
+          nativeAnnotations[entry.appearanceDocument ?? 0]?.[
+            entry.appearanceIndex
+          ];
+        if (annotation?.data.subtype !== "FreeText" || !annotation.appearance) {
+          throw new FormatError(
+            "Invalid native FreeText appearance index or AP stream."
+          );
+        }
+        if (
+          entry.action === "replace" &&
+          annotations.find(a => a.data.id === entry.id).data.subtype !==
+            "FreeText"
+        ) {
+          throw new FormatError(
+            "Native appearance replacement requires a FreeText source."
+          );
+        }
+      }
+    }
     if (
-      annotations.length === 0 ||
+      (annotations.length === 0 && nativeAppends.length === 0) ||
       intent & RenderingIntentFlag.ANNOTATIONS_DISABLE
     ) {
       pageOpList.flush(/* lastChunk = */ true);
@@ -621,7 +687,24 @@ class Page {
     // Collect the operator list promises for the annotations. Each promise
     // is resolved with the complete operator list for a single annotation.
     const opListPromises = [];
-    for (const annotation of annotations) {
+    const renderAnnotations = annotations
+      .map(annotation => ({
+        annotation,
+        entry: nativeEntries.get(annotation.data.id),
+      }))
+      .concat(
+        nativeAppends.map(entry => ({
+          annotation:
+            nativeAnnotations[entry.appearanceDocument ?? 0][
+              entry.appearanceIndex
+            ],
+          entry,
+        }))
+      );
+    for (const { annotation, entry: nativeEntry } of renderAnnotations) {
+      if (nativeEntry?.action === "delete") {
+        continue;
+      }
       if (
         intentAny ||
         (intentDisplay &&
@@ -629,6 +712,23 @@ class Page {
           annotation.mustBeViewedWhenEditing(isEditing, modifiedIds)) ||
         (intentPrint && annotation.mustBePrinted(annotationStorage))
       ) {
+        if (
+          nativeEntry?.action === "replace" ||
+          nativeEntry?.action === "append"
+        ) {
+          opListPromises.push(
+            annotation.getNativeAppearanceOperatorList(
+              nativeEvaluators[nativeEntry.appearanceDocument ?? 0],
+              task,
+              intent,
+              nativeAnnotations[nativeEntry.appearanceDocument ?? 0][
+                nativeEntry.appearanceIndex
+              ],
+              nativeEntry.id
+            )
+          );
+          continue;
+        }
         opListPromises.push(
           annotation
             .getOperatorList(partialEvaluator, task, intent, annotationStorage)

@@ -15,14 +15,7 @@
 /* EVB Viewer fork modification. See README.md and FORK_PROVENANCE.json. */
 
 import {
-  CanvasNestedDependencyTracker,
-  Dependencies,
-} from "./canvas_dependency_tracker.js";
-import {
-  convertBlackAndWhiteToRGBA,
-  convertRGBToRGBA,
-} from "../shared/image_utils.js";
-import {
+  AnnotationFlag,
   F32_BBOX_INIT,
   FeatureTest,
   FONT_IDENTITY_MATRIX,
@@ -37,6 +30,14 @@ import {
   Util,
   warn,
 } from "../shared/util.js";
+import {
+  CanvasNestedDependencyTracker,
+  Dependencies,
+} from "./canvas_dependency_tracker.js";
+import {
+  convertBlackAndWhiteToRGBA,
+  convertRGBToRGBA,
+} from "../shared/image_utils.js";
 import {
   getCurrentTransform,
   getCurrentTransformInverse,
@@ -656,6 +657,8 @@ class CanvasGraphics {
     }
     this.ctx.transform(...viewport.transform);
     this.viewportScale = viewport.scale;
+    this.annotationViewportTransform = viewport.transform;
+    this.annotationOutputTransform = transform;
 
     this.baseTransform = getCurrentTransform(this.ctx);
   }
@@ -3684,7 +3687,8 @@ class CanvasGraphics {
     transform,
     matrix,
     hasOwnCanvas,
-    canvasName
+    canvasName,
+    annotationFlags = 0
   ) {
     // The annotations are drawn just after the page content.
     // The page content drawing can potentially have set a transform,
@@ -3701,6 +3705,33 @@ class CanvasGraphics {
     }
 
     if (rect) {
+      if (
+        (!hasOwnCanvas || !this.annotationCanvasMap) &&
+        annotationFlags & (AnnotationFlag.NOROTATE | AnnotationFlag.NOZOOM)
+      ) {
+        const original = this.annotationViewportTransform;
+        const adjusted = original.slice();
+        const x = rect[0],
+          y = rect[3];
+        const anchorX = original[0] * x + original[2] * y + original[4];
+        const anchorY = original[1] * x + original[3] * y + original[5];
+        if (annotationFlags & AnnotationFlag.NOROTATE) {
+          const scale = Math.hypot(original[0], original[1]);
+          adjusted.splice(0, 4, scale, 0, 0, -scale);
+        }
+        if (annotationFlags & AnnotationFlag.NOZOOM) {
+          for (let i = 0; i < 4; i++) {
+            adjusted[i] /= this.viewportScale;
+          }
+        }
+        adjusted[4] = anchorX - adjusted[0] * x - adjusted[2] * y;
+        adjusted[5] = anchorY - adjusted[1] * x - adjusted[3] * y;
+        this.ctx.setTransform(
+          ...(this.annotationOutputTransform
+            ? Util.transform(this.annotationOutputTransform, adjusted)
+            : adjusted)
+        );
+      }
       const width = rect[2] - rect[0];
       const height = rect[3] - rect[1];
 

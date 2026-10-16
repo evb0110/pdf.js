@@ -144,6 +144,64 @@ describe("api", function () {
     ]);
   }
 
+  // Independent serialized oracle: native AP fonts deliberately reuse a
+  // source font's object number. The saved graph uses a separate font ref.
+  function buildNativeAppearancePdf(mode, flags = 4, order = "after") {
+    const mini = mode.startsWith("mini");
+    const replacement = mode.endsWith("replace");
+    const append = mode.endsWith("append");
+    const font = mini ? 6 : 10;
+    const rect = replacement ? "20 15 85 65" : "10 10 70 60";
+    const target = replacement
+      ? `0 .6 .2 rg 0 0 65 50 re f BT /F ${13} Tf 0 0 0 rg 2 25 Td (Native A) Tj ET`
+      : "0 0 0 rg 0 0 60 50 re f";
+    let annots = order === "before" ? "8 0 R 4 0 R" : "4 0 R 8 0 R";
+    if (mini) {
+      annots = append ? "12 0 R 14 0 R" : "4 0 R";
+    } else if (mode === "deleted") {
+      annots = "8 0 R";
+    } else if (mode === "append") {
+      annots += " 12 0 R 14 0 R";
+    }
+    const stream = (id, dict, data) =>
+      `${id} 0 obj\n<< ${dict} /Length ${data.length} >>\nstream\n${data}\nendstream\nendobj\n`;
+    const ap = (id, color, text) =>
+      stream(
+        id,
+        `/Type /XObject /Subtype /Form /BBox [0 0 65 50] /Resources << /Font << /F ${font} 0 R >> >>`,
+        `${color} rg 0 0 65 50 re f BT /F 12 Tf 0 0 0 rg 2 20 Td (${text}) Tj ET`
+      );
+    return assemblePdf([
+      "1 0 obj\n<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [11 0 R] /D << /BaseState /ON /Order [11 0 R] >> >> >>\nendobj\n",
+      "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+      `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /CropBox [2 3 98 97] /Resources << /Font << /PageFont 6 0 R >> >> /Contents 7 0 R /Annots [${annots}] >>\nendobj\n`,
+      `4 0 obj\n<< /Type /Annot /Subtype /FreeText /Rect [${rect}] /F ${mini ? 4 : flags} ${mini ? "" : "/OC 11 0 R"} /AS /Original /AP << /N 5 0 R >> >>\nendobj\n`,
+      stream(
+        5,
+        `/Type /XObject /Subtype /Form /BBox [0 0 ${replacement ? 65 : 60} 50] /Resources << /Font << /F ${font} 0 R >> >>`,
+        target
+      ),
+      `6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /${mini ? "Times-Roman" : "Helvetica"} >>\nendobj\n`,
+      stream(
+        7,
+        "",
+        ".8 .9 1 rg 0 0 100 100 re f BT /PageFont 7 Tf 0 0 0 rg 4 85 Td (Source font cache) Tj ET"
+      ),
+      "8 0 obj\n<< /Type /Annot /Subtype /Square /Rect [0 0 100 100] /F 4 /AP << /N 9 0 R >> >>\nendobj\n",
+      stream(
+        9,
+        "/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /ExtGState << /GS << /Type /ExtGState /ca .65 /BM /Multiply >> >> >>",
+        "q /GS gs .2 .4 .9 rg 35 20 55 55 re f Q"
+      ),
+      "10 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>\nendobj\n",
+      "11 0 obj\n<< /Type /OCG /Name (Source visibility) >>\nendobj\n",
+      "12 0 obj\n<< /Type /Annot /Subtype /FreeText /Rect [15 15 80 65] /F 4 /AP << /N 13 0 R >> >>\nendobj\n",
+      ap(13, ".8 .2 .3", "APPEND ONE"),
+      "14 0 obj\n<< /Type /Annot /Subtype /FreeText /Rect [30 25 95 75] /F 4 /AP << /N 15 0 R >> >>\nendobj\n",
+      ap(15, ".4 .8 .1", "APPEND TWO"),
+    ]);
+  }
+
   function getNamedNodeInXML(node, path) {
     for (const component of path.split(".")) {
       if (!node.childNodes) {
@@ -5652,6 +5710,252 @@ have written that much by now. So, here’s to squashing bugs.`);
       ).toThrowError(TypeError, "`hiddenAnnotationIds` must be a Set.");
 
       await loadingTask.destroy();
+    });
+
+    it("composes read-only native appearances at source slots with isolated fonts and wrapper semantics", async function () {
+      const params = data => {
+        const result = buildGetDocumentParams("basicapi.pdf", {
+          data,
+          useSystemFonts: false,
+        });
+        delete result.url;
+        return result;
+      };
+      async function pixels(pdfPage, pdfDoc, extra = {}) {
+        const viewport = pdfPage.getViewport({
+          scale: 1.25,
+          rotation: extra.rotation || 0,
+        });
+        const surface = pdfDoc.canvasFactory.create(
+          viewport.width,
+          viewport.height
+        );
+        try {
+          await pdfPage.render({ canvas: surface.canvas, viewport, ...extra })
+            .promise;
+          return surface.context.getImageData(
+            0,
+            0,
+            surface.canvas.width,
+            surface.canvas.height
+          ).data;
+        } finally {
+          pdfDoc.canvasFactory.destroy(surface);
+        }
+      }
+      async function projection(pdf, annotations) {
+        const docs = [].concat(pdf ?? []);
+        const bytes = docs.flatMap(doc => Array.from(doc));
+        const plan = new TextEncoder().encode(JSON.stringify(annotations));
+        const input = new Uint8Array([...bytes, ...plan]);
+        const digest = Array.from(
+          new Uint8Array(await crypto.subtle.digest("SHA-256", input)),
+          value => value.toString(16).padStart(2, "0")
+        ).join("");
+        return { digest, pdf, annotations };
+      }
+      for (const flags of [4, 6, 36, 0, 28]) {
+        for (const order of ["before", "after"]) {
+          const source = buildNativeAppearancePdf("source", flags, order);
+          const task = getDocument(params(source.slice()));
+          const referenceTask = getDocument(
+            params(buildNativeAppearancePdf("replace", flags, order))
+          );
+          try {
+            const sourceDoc = await task.promise,
+              referenceDoc = await referenceTask.promise;
+            const sourcePage = await sourceDoc.getPage(1),
+              referencePage = await referenceDoc.getPage(1);
+            const appearances = [
+              await projection(buildNativeAppearancePdf("mini-replace"), [
+                { action: "replace", id: "4R", appearanceIndex: 0 },
+              ]),
+              await projection(
+                [
+                  buildNativeAppearancePdf("mini-append"),
+                  buildNativeAppearancePdf("mini-append"),
+                ],
+                [
+                  { action: "retain", id: "4R" },
+                  { action: "append", id: "appended-one", appearanceIndex: 0 },
+                  { action: "append", id: "appended-two", appearanceIndex: 1 },
+                ]
+              ),
+            ];
+            for (const rotation of [0, 90, 180, 270]) {
+              const actual = await pixels(sourcePage, sourceDoc, {
+                rotation,
+                nativeAnnotationAppearance: appearances[0],
+                hiddenAnnotationIds: new Set(["4R"]),
+              });
+              expect(actual).toEqual(
+                await pixels(referencePage, referenceDoc, { rotation })
+              );
+            }
+            const appendTask = getDocument(
+              params(buildNativeAppearancePdf("append", flags, order))
+            );
+            try {
+              const appendDoc = await appendTask.promise;
+              expect(
+                await pixels(sourcePage, sourceDoc, {
+                  nativeAnnotationAppearance: appearances[1],
+                })
+              ).toEqual(await pixels(await appendDoc.getPage(1), appendDoc));
+              // A -> B -> A uses the same loaded page and colliding font refs.
+              expect(
+                await pixels(sourcePage, sourceDoc, {
+                  nativeAnnotationAppearance: appearances[0],
+                })
+              ).toEqual(await pixels(referencePage, referenceDoc));
+            } finally {
+              await appendTask.destroy();
+            }
+            const deletedTask = getDocument(
+              params(buildNativeAppearancePdf("deleted", flags, order))
+            );
+            try {
+              const deletedDoc = await deletedTask.promise;
+              expect(
+                await pixels(sourcePage, sourceDoc, {
+                  nativeAnnotationAppearance: await projection(null, [
+                    { action: "delete", id: "4R" },
+                    { action: "retain", id: "8R" },
+                  ]),
+                })
+              ).toEqual(await pixels(await deletedDoc.getPage(1), deletedDoc));
+            } finally {
+              await deletedTask.destroy();
+            }
+            const optional = await sourceDoc.getOptionalContentConfig();
+            optional.setVisibility("11R", false);
+            const referenceOptional =
+              await referenceDoc.getOptionalContentConfig();
+            referenceOptional.setVisibility("11R", false);
+            expect(
+              await pixels(sourcePage, sourceDoc, {
+                nativeAnnotationAppearance: appearances[0],
+                optionalContentConfigPromise: Promise.resolve(optional),
+              })
+            ).toEqual(
+              await pixels(referencePage, referenceDoc, {
+                optionalContentConfigPromise:
+                  Promise.resolve(referenceOptional),
+              })
+            );
+            expect(await sourceDoc.getData()).toEqual(source);
+          } finally {
+            await task.destroy();
+            await referenceTask.destroy();
+          }
+        }
+      }
+    });
+
+    it("rejects malformed native replacements and preserves a sibling render after cancellation", async function () {
+      const data = buildNativeAppearancePdf("source");
+      const task = getDocument({ data, useSystemFonts: false });
+      try {
+        const doc = await task.promise,
+          sourcePage = await doc.getPage(1);
+        const viewport = sourcePage.getViewport({ scale: 1 });
+        const surfaces = [
+          doc.canvasFactory.create(100, 100),
+          doc.canvasFactory.create(100, 100),
+        ];
+        const nativeAnnotationAppearance = {
+          digest: "a".repeat(64),
+          pdf: buildNativeAppearancePdf("mini-replace"),
+          annotations: [{ action: "replace", id: "4R", appearanceIndex: 0 }],
+        };
+        try {
+          const canceled = sourcePage.render({
+            canvas: surfaces[0].canvas,
+            viewport,
+            nativeAnnotationAppearance,
+          });
+          const sibling = sourcePage.render({
+            canvas: surfaces[1].canvas,
+            viewport,
+            nativeAnnotationAppearance,
+          });
+          nativeAnnotationAppearance.pdf.fill(0);
+          nativeAnnotationAppearance.annotations[0].action = "delete";
+          canceled.cancel();
+          await expectAsync(canceled.promise).toBeRejectedWithError(
+            RenderingCancelledException
+          );
+          await sibling.promise;
+          const expectedTask = getDocument({
+            data: buildNativeAppearancePdf("replace"),
+            useSystemFonts: false,
+          });
+          try {
+            const expectedDoc = await expectedTask.promise;
+            const expectedPage = await expectedDoc.getPage(1);
+            await expectedPage.render({ canvas: surfaces[0].canvas, viewport })
+              .promise;
+            expect(
+              surfaces[1].context.getImageData(0, 0, 100, 100).data
+            ).toEqual(surfaces[0].context.getImageData(0, 0, 100, 100).data);
+          } finally {
+            await expectedTask.destroy();
+          }
+          const failure = sourcePage.render({
+            canvas: surfaces[0].canvas,
+            viewport,
+            nativeAnnotationAppearance: {
+              ...nativeAnnotationAppearance,
+              digest: "b".repeat(64),
+              pdf: new Uint8Array([1, 2, 3]),
+              annotations: [
+                { action: "replace", id: "4R", appearanceIndex: 0 },
+              ],
+            },
+          });
+          await expectAsync(failure.promise).toBeRejected();
+          const missingFontPdf = stringToBytes(
+            bytesToString(buildNativeAppearancePdf("mini-replace")).replace(
+              "/F 13 Tf",
+              "/X 13 Tf"
+            )
+          );
+          await expectAsync(
+            sourcePage.render({
+              canvas: surfaces[0].canvas,
+              viewport,
+              nativeAnnotationAppearance: {
+                digest: "c".repeat(64),
+                pdf: missingFontPdf,
+                annotations: [
+                  { action: "replace", id: "4R", appearanceIndex: 0 },
+                ],
+              },
+            }).promise
+          ).toBeRejected();
+          expect(() =>
+            sourcePage.render({
+              canvas: surfaces[0].canvas,
+              viewport,
+              nativeAnnotationAppearance: {
+                ...nativeAnnotationAppearance,
+                annotations: [
+                  nativeAnnotationAppearance.annotations[0],
+                  nativeAnnotationAppearance.annotations[0],
+                ],
+              },
+            })
+          ).toThrowError(TypeError);
+          await sourcePage.render({ canvas: surfaces[0].canvas, viewport })
+            .promise;
+        } finally {
+          for (const surface of surfaces) {
+            doc.canvasFactory.destroy(surface);
+          }
+        }
+      } finally {
+        await task.destroy();
+      }
     });
 
     it("hides annotation scopes across operator list chunks and nesting", function () {
