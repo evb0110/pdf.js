@@ -5530,6 +5530,42 @@ have written that much by now. So, here’s to squashing bugs.`);
       await loadingTask.destroy();
     });
 
+    it("renders identical display pixels while animation frames are suspended", async function () {
+      if (isNodeJS) {
+        pending("Animation frames are a browser scheduling policy.");
+      }
+      const viewport = page.getViewport({ scale: 1 });
+      const { canvasFactory } = pdfDocument;
+      const normal = canvasFactory.create(viewport.width, viewport.height);
+      const offscreen = canvasFactory.create(viewport.width, viewport.height);
+      try {
+        await page.render({ canvas: normal.canvas, viewport }).promise;
+        const expected = normal.context.getImageData(
+          0,
+          0,
+          normal.canvas.width,
+          normal.canvas.height
+        ).data;
+        spyOn(window, "requestAnimationFrame").and.returnValue(0);
+        await page.render({
+          canvas: offscreen.canvas,
+          viewport,
+          useRequestAnimationFrame: false,
+        }).promise;
+        expect(
+          offscreen.context.getImageData(
+            0,
+            0,
+            offscreen.canvas.width,
+            offscreen.canvas.height
+          ).data
+        ).toEqual(expected);
+      } finally {
+        canvasFactory.destroy(normal);
+        canvasFactory.destroy(offscreen);
+      }
+    });
+
     it("cancels rendering of page", async function () {
       const viewport = page.getViewport({ scale: 1 });
       expect(viewport).toBeInstanceOf(PageViewport);

@@ -11,3 +11,6 @@ name is pdfjs-dist for compatibility with existing PDF.js consumers.
 
 EVB Viewer additionally consumes immutable native FreeText appearance PDFs as
 read-only render resources. PDF.js does not edit or save those annotations.
+
+EVB Viewer can render offscreen display rasters without animation callbacks,
+preserving display content while the browser tab is hidden.

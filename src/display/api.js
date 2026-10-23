@@ -1273,6 +1273,10 @@ class PDFDocumentProxy {
  *   of the canvas. Every other annotation still renders according to
  *   `annotationMode`. The set is read when `render` is called; later changes
  *   to it do not affect the running task.
+ * @property {boolean} [useRequestAnimationFrame] - Schedule display rendering
+ *   on animation frames. Defaults to true. Set to false for offscreen work
+ *   that must continue when a hidden page receives no animation callbacks.
+ *   This does not change rendering intent or annotation visibility.
  */
 
 /**
@@ -1605,6 +1609,7 @@ class PDFPageProxy {
     operationsFilter = null,
     hiddenAnnotationIds = null,
     nativeAnnotationAppearance = null,
+    useRequestAnimationFrame = true,
   }) {
     nativeAnnotationAppearance = captureNativeAnnotationAppearance(
       nativeAnnotationAppearance
@@ -1776,7 +1781,7 @@ class PDFPageProxy {
       pageIndex: this._pageIndex,
       canvasFactory: this._transport.canvasFactory,
       filterFactory: this._transport.filterFactory,
-      useRequestAnimationFrame: !intentPrint,
+      useRequestAnimationFrame: useRequestAnimationFrame && !intentPrint,
       pdfBug: this._pdfBug,
       pageColors,
       enableHWA: this._transport.enableHWA,
